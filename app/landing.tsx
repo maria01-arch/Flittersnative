@@ -1,32 +1,28 @@
 import { useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Image, Dimensions } from 'react-native';
 import { router } from 'expo-router';
 import { useTheme } from '@/lib/ThemeContext';
 import { spacing } from '@/lib/theme';
 
+const { height: SCREEN_H } = Dimensions.get('window');
+
 export default function LandingScreen() {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.85)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
+  const slideAnim = useRef(new Animated.Value(24)).current;
 
   useEffect(() => {
-    Animated.sequence([
-      Animated.parallel([
-        Animated.timing(fadeAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
-        Animated.spring(scaleAnim, { toValue: 1, friction: 6, tension: 40, useNativeDriver: true }),
-      ]),
-      Animated.timing(slideAnim, { toValue: 0, duration: 500, useNativeDriver: true }),
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 650, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 650, useNativeDriver: true }),
     ]).start();
   }, []);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-        <Animated.View style={{ opacity: fadeAnim, transform: [{ scale: scaleAnim }] }}>
-          <View style={[styles.logoCircle, { backgroundColor: colors.primary }]}>
-            <Text style={styles.logoLetter}>F</Text>
-          </View>
+      <View style={styles.hero}>
+        <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
+          <Image source={require('../assets/images/flitters-logo.png')} style={styles.logo} resizeMode="contain" />
         </Animated.View>
         <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
           <Text style={[styles.title, { color: colors.text }]}>Flitters</Text>
@@ -47,13 +43,17 @@ export default function LandingScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: spacing.xl, paddingTop: 100, paddingBottom: 50 },
-  logoCircle: { width: 96, height: 96, borderRadius: 48, justifyContent: 'center', alignItems: 'center', alignSelf: 'center', marginBottom: 24 },
-  logoLetter: { color: '#fff', fontSize: 48, fontWeight: '900' },
-  title: { fontSize: 36, fontWeight: '900', textAlign: 'center', letterSpacing: -1 },
-  tagline: { fontSize: 15, textAlign: 'center', marginTop: 8 },
-  primaryBtn: { borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginBottom: 12 },
+  // No header on this screen (see app/_layout.tsx) — an earlier version had
+  // a default native header bar reserving space above this just to show
+  // the literal route name "landing", which is what was eating the top of
+  // the screen for no reason.
+  container: { flex: 1, padding: spacing.xl, paddingTop: Math.max(60, SCREEN_H * 0.08), paddingBottom: 50 },
+  hero: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  logo: { width: 132, height: 132, marginBottom: 20 },
+  title: { fontSize: 38, fontWeight: '900', textAlign: 'center', letterSpacing: -1.5 },
+  tagline: { fontSize: 16, textAlign: 'center', marginTop: 10 },
+  primaryBtn: { borderRadius: 16, paddingVertical: 17, alignItems: 'center', marginBottom: 12 },
   primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  secondaryBtn: { borderRadius: 16, paddingVertical: 16, alignItems: 'center', borderWidth: 1.5 },
+  secondaryBtn: { borderRadius: 16, paddingVertical: 17, alignItems: 'center', borderWidth: 1.5 },
   secondaryBtnText: { fontSize: 16, fontWeight: '700' },
 });

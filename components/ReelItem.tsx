@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet, Dimensions, Pressable } from 'react-native';
+import { View, Text, Image, TextInput, TouchableOpacity, StyleSheet, Dimensions, Pressable, ActivityIndicator } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { usePreferences } from '@/lib/PreferencesContext';
+import { useAuth } from '@/lib/AuthContext';
+import { supabase } from '@/lib/supabase';
+import ReelCommentsSheet from './ReelCommentsSheet';
+import Avatar from './Avatar';
+import VerifiedBadge from './VerifiedBadge';
 
 const { height: SCREEN_H } = Dimensions.get('window');
 
@@ -11,17 +16,25 @@ export default function ReelItem({
   reel,
   active,
   isMine,
+  height,
   onLike,
   onDelete,
+  onCommentPosted,
 }: {
   reel: any;
   active: boolean;
   isMine?: boolean;
+  height?: number;
   onLike: (reel: any) => void;
   onDelete?: (reel: any) => void;
+  onCommentPosted?: (reel: any) => void;
 }) {
   const { autoplayVideos } = usePreferences();
+  const { session } = useAuth();
   const [userPaused, setUserPaused] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [quickComment, setQuickComment] = useState('');
+  const [sendingQuick, setSendingQuick] = useState(false);
   const player = useVideoPlayer(reel.video_url, (p) => {
     p.loop = true;
   });
@@ -48,8 +61,25 @@ export default function ReelItem({
 
   const togglePlay = () => setUserPaused((p) => !p);
 
+  // A quick-post box directly under the reel, so leaving a comment doesn't
+  // require opening the full sheet first — the sheet (opened from the
+  // comment icon) is still there for reading existing ones.
+  const sendQuickComment = async () => {
+    const content = quickComment.trim();
+    if (!content || !session?.user?.id) return;
+    setSendingQuick(true);
+    const { error } = await supabase.from('comments').insert({ reel_id: reel.id, user_id: session.user.id, content });
+    setSendingQuick(false);
+    if (error) {
+      console.error('[ReelItem] quick comment failed:', error.message, error);
+      return;
+    }
+    setQuickComment('');
+    onCommentPosted?.(reel);
+  };
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, height ? { height } : null]}>
       <Pressable style={StyleSheet.absoluteFill} onPress={togglePlay}>
         <VideoView player={player} style={styles.video} contentFit="cover" nativeControls={false} />
         {(userPaused || !autoplayVideos) && (
@@ -62,11 +92,9 @@ export default function ReelItem({
       <View style={styles.overlay} pointerEvents="box-none">
         <View style={styles.bottomInfo}>
           <TouchableOpacity style={styles.authorRow} onPress={() => reel.author?.id && router.push(`/user/${reel.author.id}`)}>
-            <Image
-              source={{ uri: reel.author?.avatar_url || 'https://placehold.co/80x80/6C5CE7/fff?text=' + (reel.author?.display_name?.[0] || '?') }}
-              style={styles.avatar}
-            />
+            <Avatar uri={reel.author?.avatar_url} size={32} />
             <Text style={styles.authorName}>{reel.author?.display_name}</Text>
+            <VerifiedBadge verified={reel.author?.verified} isAuthentic={reel.author?.is_authentic} size={13} />
           </TouchableOpacity>
           {!!reel.caption && <Text style={styles.caption} numberOfLines={2}>{reel.caption}</Text>}
         </View>
@@ -75,6 +103,10 @@ export default function ReelItem({
             <Ionicons name={reel.liked_by_me ? 'heart' : 'heart-outline'} size={30} color={reel.liked_by_me ? '#F91880' : '#fff'} />
             <Text style={styles.actionText}>{reel.likes_count || 0}</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => setCommentsOpen(true)}>
+            <Ionicons name="chatbubble-outline" size={27} color="#fff" />
+            <Text style={styles.actionText}>{reel.comments_count || 0}</Text>
+          </TouchableOpacity>
           {isMine && (
             <TouchableOpacity style={styles.actionBtn} onPress={() => onDelete && onDelete(reel)}>
               <Ionicons name="trash-outline" size={28} color="#fff" />
@@ -82,6 +114,29 @@ export default function ReelItem({
           )}
         </View>
       </View>
+      <View style={styles.quickCommentBar} pointerEvents="box-none">
+        <TextInput
+          style={styles.quickCommentInput}
+          placeholder="Add a comment..."
+          placeholderTextColor="rgba(255,255,255,0.6)"
+          value={quickComment}
+          onChangeText={setQuickComment}
+          onFocus={() => setUserPaused(true)}
+        />
+        <TouchableOpacity onPress={sendQuickComment} disabled={sendingQuick || !quickComment.trim()}>
+          {sendingQuick ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Ionicons name="send" size={20} color={quickComment.trim() ? '#fff' : 'rgba(255,255,255,0.5)'} />
+          )}
+        </TouchableOpacity>
+      </View>
+      <ReelCommentsSheet
+        reelId={reel.id}
+        visible={commentsOpen}
+        onClose={() => setCommentsOpen(false)}
+        onCommentPosted={() => onCommentPosted?.(reel)}
+      />
     </View>
   );
 }
@@ -99,4 +154,21 @@ const styles = StyleSheet.create({
   actions: { alignItems: 'center', gap: 22 },
   actionBtn: { alignItems: 'center', gap: 4 },
   actionText: { color: '#fff', fontSize: 12, fontWeight: '600' },
+  quickCommentBar: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderRadius: 22,
+    paddingLeft: 16,
+    paddingRight: 14,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  quickCommentInput: { flex: 1, color: '#fff', fontSize: 14, paddingVertical: 8 },
 });

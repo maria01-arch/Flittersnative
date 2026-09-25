@@ -1,11 +1,18 @@
 import { supabase } from './supabase';
 
 export async function loadCommentTree(postId: string, myUserId?: string) {
-  const { data } = await supabase
+  // profiles!comments_user_id_fkey disambiguates the join — the `comments`
+  // table has a second, indirect path to `profiles` through
+  // `comment_reactions` (comment_id + user_id), so a bare `profiles(...)`
+  // embed is ambiguous and PostgREST rejects the whole query with a
+  // PGRST201 error. The webapp already works around this the same way.
+  const { data, error } = await supabase
     .from('comments')
-    .select('*,author:profiles(*),comment_likes(user_id),comment_reposts(user_id)')
+    .select('*,author:profiles!comments_user_id_fkey(*),comment_likes(user_id),comment_reposts(user_id)')
     .eq('post_id', postId)
     .order('created_at', { ascending: true });
+
+  if (error) console.error('[loadCommentTree] failed:', error.message, error);
 
   const list = (data || []).map((c: any) => ({
     ...c,

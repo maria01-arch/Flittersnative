@@ -1,47 +1,52 @@
-import { useEffect } from 'react';
-import { TouchableOpacity, View, Text, StyleSheet, Image } from 'react-native';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { useEffect, useState } from 'react';
+import { TouchableOpacity, View, Text, StyleSheet, Image, ActivityIndicator } from 'react-native';
+import * as VideoThumbnails from 'expo-video-thumbnails';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
-import { usePreferences } from '@/lib/PreferencesContext';
 
-export default function ReelPreviewThumb({ reel, visible }: { reel: any; visible: boolean }) {
-  const { autoplayVideos } = usePreferences();
-  const shouldPlay = autoplayVideos && visible;
-
-  const player = useVideoPlayer(reel.video_url, (p) => {
-    p.muted = true;
-    p.loop = true;
-  });
-
-  useEffect(() => {
-    try {
-      if (shouldPlay) player.play();
-      else player.pause();
-    } catch {}
-  }, [shouldPlay, player]);
+// No video player here at all anymore — just a real still frame pulled
+// from the video once, cached for this component's lifetime. That's what
+// was showing as a black box before (a video component that was either
+// never actually playing or hadn't decoded a frame yet), and it also
+// removes any autoplay/decoder cost from this row entirely.
+export default function ReelPreviewThumb({ reel }: { reel: any }) {
+  const [thumbUri, setThumbUri] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+    VideoThumbnails.getThumbnailAsync(reel.video_url, { time: 300 })
+      .then(({ uri }) => {
+        if (!cancelled) setThumbUri(uri);
+      })
+      .catch((err) => {
+        console.error('[ReelPreviewThumb] thumbnail generation failed:', reel.video_url, err);
+        if (!cancelled) setFailed(true);
+      });
     return () => {
-      try {
-        player.pause();
-      } catch {}
+      cancelled = true;
     };
-  }, [player]);
+  }, [reel.video_url]);
 
   return (
     <TouchableOpacity style={styles.reelThumb} onPress={() => router.push('/(tabs)/reels')}>
-      {autoplayVideos ? (
-        <VideoView player={player} style={styles.video} contentFit="cover" nativeControls={false} />
+      {thumbUri ? (
+        <Image source={{ uri: thumbUri }} style={styles.video} resizeMode="cover" />
       ) : (
         <View style={[styles.video, styles.staticFallback]}>
-          <Ionicons name="play-circle" size={32} color="rgba(255,255,255,0.85)" />
+          {failed ? (
+            <Ionicons name="play-circle" size={32} color="rgba(255,255,255,0.85)" />
+          ) : (
+            <ActivityIndicator size="small" color="rgba(255,255,255,0.6)" />
+          )}
         </View>
       )}
       <View style={styles.reelPlayBadge}>
         <Ionicons name="play" size={12} color="#fff" />
       </View>
-      <Text style={styles.reelThumbName} numberOfLines={1}>{reel.author?.display_name}</Text>
+      <Text style={styles.reelThumbName} numberOfLines={1}>
+        {reel.author?.display_name}
+      </Text>
     </TouchableOpacity>
   );
 }

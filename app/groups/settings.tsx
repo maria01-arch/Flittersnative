@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
 import { uploadImage } from '@/lib/upload';
 import { spacing } from '@/lib/theme';
+import Avatar from '@/components/Avatar';
 
 export default function GroupSettingsScreen() {
   const { id } = useLocalSearchParams();
@@ -131,7 +132,7 @@ export default function GroupSettingsScreen() {
 
       <TouchableOpacity style={styles.avatarWrap} onPress={isAdmin ? pickAvatar : undefined}>
         {newAvatarUri || group?.avatar_url ? (
-          <Image source={{ uri: newAvatarUri || group?.avatar_url }} style={styles.avatar} />
+          <Image source={{ uri: newAvatarUri || group?.avatar_url }} style={[styles.avatar, { backgroundColor: colors.border }]} />
         ) : (
           <View style={[styles.avatar, styles.avatarFallback, { backgroundColor: group?.cover_color || colors.primary }]}>
             <Text style={styles.avatarLetter}>{group?.name?.[0]?.toUpperCase() || 'G'}</Text>
@@ -173,7 +174,7 @@ export default function GroupSettingsScreen() {
         renderItem={({ item }) => (
           <View style={[styles.memberRow, { borderBottomColor: colors.border }]}>
             <TouchableOpacity style={styles.memberInfo} onPress={() => router.push(`/user/${item.user_id}`)}>
-              <Image source={{ uri: item.profile?.avatar_url || 'https://placehold.co/60x60/6C5CE7/fff?text=?' }} style={styles.memberAvatar} />
+              <Avatar uri={item.profile?.avatar_url} size={40} />
               <View>
                 <Text style={[styles.memberName, { color: colors.text }]}>{item.profile?.display_name}</Text>
                 {item.role === 'admin' && <Text style={[styles.adminTag, { color: colors.primary }]}>Admin</Text>}
@@ -193,8 +194,8 @@ export default function GroupSettingsScreen() {
                   )
                 )}
                 {isCreator && (
-                  <TouchableOpacity style={[styles.smallBtn, { borderColor: '#EF4444' }]} onPress={() => removeMember(item)}>
-                    <Text style={[styles.smallBtnText, { color: '#EF4444' }]}>Remove</Text>
+                  <TouchableOpacity style={[styles.smallBtn, { borderColor: colors.danger }]} onPress={() => removeMember(item)}>
+                    <Text style={[styles.smallBtnText, { color: colors.danger }]}>Remove</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -203,8 +204,8 @@ export default function GroupSettingsScreen() {
         )}
       />
 
-      <TouchableOpacity style={styles.leaveButton} onPress={leaveGroup}>
-        <Text style={styles.leaveText}>Leave Group</Text>
+      <TouchableOpacity style={[styles.leaveButton, { borderColor: colors.danger }]} onPress={leaveGroup}>
+        <Text style={[styles.leaveText, { color: colors.danger }]}>Leave Group</Text>
       </TouchableOpacity>
     </ScrollView>
   );
@@ -217,7 +218,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 16, fontWeight: '700' },
   save: { fontSize: 16, fontWeight: '700' },
   avatarWrap: { alignItems: 'center', marginTop: 20, marginBottom: 10 },
-  avatar: { width: 90, height: 90, borderRadius: 20, backgroundColor: '#ddd' },
+  avatar: { width: 90, height: 90, borderRadius: 20 },
   avatarFallback: { justifyContent: 'center', alignItems: 'center' },
   avatarLetter: { color: '#fff', fontWeight: '800', fontSize: 32 },
   changePhoto: { marginTop: 8, fontWeight: '600' },
@@ -230,11 +231,11 @@ const styles = StyleSheet.create({
   sectionHeader: { fontSize: 12, fontWeight: '700', marginTop: spacing.xl, marginBottom: 6, paddingHorizontal: spacing.lg, letterSpacing: 0.5 },
   memberRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: 10, borderBottomWidth: 1 },
   memberInfo: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
-  memberAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#ddd' },
+  memberAvatar: { width: 40, height: 40, borderRadius: 20 },
   memberName: { fontSize: 14, fontWeight: '600' },
   adminTag: { fontSize: 11, fontWeight: '700', marginTop: 1 },
   smallBtn: { borderWidth: 1, borderRadius: 12, paddingVertical: 5, paddingHorizontal: 10 },
   smallBtnText: { fontSize: 12, fontWeight: '700' },
-  leaveButton: { margin: spacing.lg, marginTop: spacing.xl, borderWidth: 1, borderColor: '#EF4444', borderRadius: 20, paddingVertical: 12, alignItems: 'center' },
-  leaveText: { color: '#EF4444', fontWeight: '700' },
+  leaveButton: { margin: spacing.lg, marginTop: spacing.xl, borderWidth: 1, borderRadius: 20, paddingVertical: 12, alignItems: 'center' },
+  leaveText: { fontWeight: '700' },
 });

@@ -5,6 +5,7 @@ import { useTheme } from '@/lib/ThemeContext';
 import MessageActionSheet from './MessageActionSheet';
 import { formatMessageTime } from '@/lib/formatTime';
 import LinkifiedText from './LinkifiedText';
+import VoiceMessagePlayer from './VoiceMessagePlayer';
 
 export default function MessageBubble({
   message,
@@ -23,6 +24,7 @@ export default function MessageBubble({
   onDelete,
   onReact,
   onPin,
+  onRetry,
 }: {
   message: any;
   isMine: boolean;
@@ -40,6 +42,7 @@ export default function MessageBubble({
   onDelete: (m: any) => void;
   onReact: (m: any, emoji: string) => void;
   onPin: (m: any) => void;
+  onRetry?: (m: any) => void;
 }) {
   const { colors } = useTheme();
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -64,6 +67,10 @@ export default function MessageBubble({
     grouped[r.emoji] = (grouped[r.emoji] || 0) + 1;
   });
   const myReaction = reactions.find((r) => r.user_id === currentUserId)?.emoji;
+  const isVoice = !!(message.is_voice && message.voice_url);
+  const isImage = !!(message.image_url && !isVoice);
+  const isPending = !!message._pending;
+  const isFailed = !!message._failed;
 
   return (
     <View style={[styles.row, isMine ? styles.myRow : styles.theirRow, tightTop && styles.rowTight]}>
@@ -79,7 +86,7 @@ export default function MessageBubble({
               <Text style={[styles.pinLabel, { color: colors.faint }]}>Pinned</Text>
             </View>
           )}
-          <View style={[styles.bubble, isMine ? { backgroundColor: colors.primary } : { backgroundColor: colors.bubbleTheirs }]}>
+          <View style={[styles.bubble, isMine ? { backgroundColor: colors.primary } : { backgroundColor: colors.bubbleTheirs }, isVoice && styles.voiceBubble, isImage && styles.imageBubble]}>
             {message.reply_to ? (
               <View style={[styles.replyQuote, { borderLeftColor: isMine ? 'rgba(255,255,255,0.6)' : colors.primary }]}>
                 <Text style={[styles.replyQuoteText, { color: isMine ? 'rgba(255,255,255,0.85)' : colors.subtext }]} numberOfLines={1}>
@@ -87,17 +94,37 @@ export default function MessageBubble({
                 </Text>
               </View>
             ) : null}
-            <LinkifiedText
-              text={message.content}
-              style={isMine ? styles.myText : [styles.theirText, { color: colors.text }]}
-              linkColor={isMine ? '#D6E4FF' : colors.primary}
-            />
+            {isVoice ? (
+              <VoiceMessagePlayer url={message.voice_url} duration={message.voice_duration} isMine={isMine} />
+            ) : isImage ? (
+              <Image source={{ uri: message.image_url }} style={styles.messageImage} resizeMode="cover" />
+            ) : (
+              <LinkifiedText
+                text={message.content}
+                style={isMine ? styles.myText : [styles.theirText, { color: colors.text }]}
+                linkColor={isMine ? '#D6E4FF' : colors.primary}
+              />
+            )}
           </View>
           {showTimestamp && (
             <View style={[styles.metaRow, isMine ? { alignSelf: 'flex-end' } : { alignSelf: 'flex-start' }]}>
-              <Text style={[styles.timeText, { color: colors.faint }]}>{formatMessageTime(message.created_at)}</Text>
-              {isMine && isRead !== undefined && (
-                <Ionicons name={isRead ? 'checkmark-done' : 'checkmark'} size={13} color={isRead ? colors.primary : colors.faint} style={{ marginLeft: 3 }} />
+              {isFailed ? (
+                <TouchableOpacity style={styles.retryRow} onPress={() => onRetry?.(message)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                  <Ionicons name="alert-circle" size={12} color={colors.danger} />
+                  <Text style={[styles.retryText, { color: colors.danger }]}>Not sent · Tap to retry</Text>
+                </TouchableOpacity>
+              ) : (
+                <>
+                  <Text style={[styles.timeText, { color: colors.faint }]}>{formatMessageTime(message.created_at)}</Text>
+                  {isMine && isPending ? (
+                    <Ionicons name="time-outline" size={12} color={colors.faint} style={{ marginLeft: 3 }} />
+                  ) : (
+                    isMine &&
+                    isRead !== undefined && (
+                      <Ionicons name={isRead ? 'checkmark-done' : 'checkmark'} size={13} color={isRead ? colors.primary : colors.faint} style={{ marginLeft: 3 }} />
+                    )
+                  )}
+                </>
               )}
             </View>
           )}
@@ -163,12 +190,17 @@ const styles = StyleSheet.create({
   pinRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginBottom: 2 },
   pinLabel: { fontSize: 10, fontWeight: '600' },
   bubble: { maxWidth: 260, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10 },
+  voiceBubble: { paddingVertical: 8, minWidth: 210 },
+  imageBubble: { padding: 0, overflow: 'hidden' },
+  messageImage: { width: 220, height: 220, backgroundColor: 'rgba(0,0,0,0.08)' },
   replyQuote: { borderLeftWidth: 3, paddingLeft: 8, marginBottom: 5 },
   replyQuoteText: { fontSize: 12.5 },
   myText: { color: '#fff', fontSize: 15 },
   theirText: { fontSize: 15 },
   metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2, paddingHorizontal: 4 },
   timeText: { fontSize: 10.5 },
+  retryRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  retryText: { fontSize: 10.5, fontWeight: '600' },
   reactionsRow: { flexDirection: 'row', gap: 4, marginTop: 3 },
   reactionPill: { flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 12, borderWidth: 1, paddingHorizontal: 6, paddingVertical: 2 },
   reactionEmoji: { fontSize: 13 },

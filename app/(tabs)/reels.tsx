@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { View, FlatList, ActivityIndicator, Dimensions, StyleSheet } from 'react-native';
+import { View, FlatList, ActivityIndicator, StyleSheet, LayoutChangeEvent } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import ReelItem from '@/components/ReelItem';
 import { Alert } from 'react-native';
-
-const { height: SCREEN_H } = Dimensions.get('window');
 
 export default function ReelsScreen() {
   const { session } = useAuth();
@@ -15,6 +13,17 @@ export default function ReelsScreen() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [tabFocused, setTabFocused] = useState(false);
   const mounted = useRef(true);
+  // Measured from the actual container, not Dimensions.get('window') — with
+  // edge-to-edge enabled, the window dimension doesn't reliably match what
+  // this View is actually laid out at, and that mismatch is exactly what
+  // was making reels appear letterboxed/misaligned: FlatList was paging by
+  // a height the video wasn't actually filling.
+  const [pageHeight, setPageHeight] = useState(0);
+
+  const onLayout = (e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    if (h > 0 && h !== pageHeight) setPageHeight(h);
+  };
 
   useEffect(() => {
     mounted.current = true;
@@ -33,7 +42,7 @@ export default function ReelsScreen() {
   const load = async () => {
     const { data } = await supabase
       .from('reels')
-      .select('*,author:profiles(id,display_name,username,avatar_url),reel_likes(user_id)')
+      .select('*,author:profiles(id,display_name,username,avatar_url,verified,is_authentic),reel_likes(user_id),comments(id)')
       .order('created_at', { ascending: false })
       .limit(30);
     if (!mounted.current) return;
@@ -42,6 +51,7 @@ export default function ReelsScreen() {
         ...r,
         likes_count: r.reel_likes?.length || 0,
         liked_by_me: r.reel_likes?.some((l: any) => l.user_id === session?.user?.id) || false,
+        comments_count: r.comments?.length || 0,
       }))
     );
     setLoading(false);
@@ -79,6 +89,10 @@ export default function ReelsScreen() {
     ]);
   };
 
+  const bumpCommentCount = (reel: any) => {
+    setReels((prev) => prev.map((r) => (r.id === reel.id ? { ...r, comments_count: (r.comments_count || 0) + 1 } : r)));
+  };
+
   const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
     if (!mounted.current) return;
     if (viewableItems.length > 0) setActiveIndex(viewableItems[0].index ?? 0);
@@ -93,18 +107,38 @@ export default function ReelsScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <FlatList
-        data={reels}
-        keyExtractor={(item) => item.id}
-        pagingEnabled
-        showsVerticalScrollIndicator={false}
-        snapToInterval={SCREEN_H}
-        decelerationRate="fast"
-        renderItem={({ item, index }) => <ReelItem reel={item} active={tabFocused && index === activeIndex} isMine={item.user_id === session?.user?.id} onLike={toggleLike} onDelete={deleteReel} />}
-        onViewableItemsChanged={onViewableItemsChanged}
-        viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
-      />
+    <View style={styles.container} onLayout={onLayout}>
+      {pageHeight > 0 && (
+        <FlatList
+          data={reels}
+          keyExtractor={(item) => item.id}
+          pagingEnabled
+          showsVerticalScrollIndicator={false}
+          snapToInterval={pageHeight}
+          snapToAlignment="start"
+          decelerationRate="fast"
+          // Without this, a strong fast swipe can carry enough momentum to
+          // sail past 2-3 snap points before the list settles — this locks
+          // scrolling to exactly one page per gesture, however hard you flick.
+          disableIntervalMomentum
+          // Matches the measured height exactly, so FlatList's paging math
+          // and each item's actual rendered size never disagree.
+          getItemLayout={(_, index) => ({ length: pageHeight, offset: pageHeight * index, index })}
+          renderItem={({ item, index }) => (
+            <ReelItem
+              reel={item}
+              height={pageHeight}
+              active={tabFocused && index === activeIndex}
+              isMine={item.user_id === session?.user?.id}
+              onLike={toggleLike}
+              onDelete={deleteReel}
+              onCommentPosted={bumpCommentCount}
+            />
+          )}
+          onViewableItemsChanged={onViewableItemsChanged}
+          viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
+        />
+      )}
     </View>
   );
 }

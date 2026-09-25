@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import { View, Text, FlatList, Image, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, Pressable } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, Pressable, Alert } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import { router, useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
@@ -9,6 +10,15 @@ import { useOnlinePresence } from '@/lib/usePresence';
 import { useInbox } from '@/lib/InboxContext';
 import { useAppForeground } from '@/lib/useAppForeground';
 import { spacing } from '@/lib/theme';
+import Avatar from '@/components/Avatar';
+import ActionSheet, { ActionSheetOption } from '@/components/ActionSheet';
+
+function previewText(msg: any): string | null {
+  if (!msg) return null;
+  if (msg.is_voice) return '🎤 Voice message';
+  if (msg.image_url) return '📷 Photo';
+  return msg.content || null;
+}
 
 export default function ChatsScreen() {
   const { session } = useAuth();
@@ -18,6 +28,7 @@ export default function ChatsScreen() {
   const [menuOpen, setMenuOpen] = useState(false);
   const onlineIds = useOnlinePresence(session?.user?.id);
   const { version } = useInbox();
+  const swipeRefs = useRef<Record<string, Swipeable | null>>({});
 
   const load = useCallback(async () => {
     const myId = session?.user?.id;
@@ -40,7 +51,7 @@ export default function ChatsScreen() {
 
       const { data: msgs } = await supabase
         .from('messages')
-        .select('conversation_id,content,created_at')
+        .select('conversation_id,content,is_voice,image_url,created_at')
         .in('conversation_id', convIds)
         .order('created_at', { ascending: false })
         .limit(500);
@@ -55,7 +66,7 @@ export default function ChatsScreen() {
         title: profMap[p.user_id]?.display_name || 'Unknown',
         avatar: profMap[p.user_id]?.avatar_url,
         otherId: p.user_id,
-        lastText: lastByConv[p.conversation_id]?.content,
+        lastText: previewText(lastByConv[p.conversation_id]),
         lastAt: lastByConv[p.conversation_id]?.created_at,
       }));
     }
@@ -67,7 +78,7 @@ export default function ChatsScreen() {
       const { data: groups } = await supabase.from('groups').select('*').in('id', groupIds);
       const { data: gmsgs } = await supabase
         .from('group_messages')
-        .select('group_id,content,created_at')
+        .select('group_id,content,is_voice,image_url,created_at')
         .in('group_id', groupIds)
         .order('created_at', { ascending: false })
         .limit(500);
@@ -81,7 +92,7 @@ export default function ChatsScreen() {
         title: g.name,
         avatar: g.avatar_url,
         coverColor: g.cover_color,
-        lastText: lastByGroup[g.id]?.content,
+        lastText: previewText(lastByGroup[g.id]),
         lastAt: lastByGroup[g.id]?.created_at,
       }));
     }
@@ -115,6 +126,64 @@ export default function ChatsScreen() {
     }
   };
 
+  const removeChatLocally = (item: any) => setChats((prev) => prev.filter((c) => c.id !== item.id || c.kind !== item.kind));
+
+  const deleteChat = async (item: any) => {
+    if (!session?.user?.id) return;
+    if (item.kind === 'dm') {
+      await supabase.from('conversation_participants').delete().eq('conversation_id', item.id).eq('user_id', session.user.id);
+    } else {
+      await supabase.from('group_members').delete().eq('group_id', item.id).eq('user_id', session.user.id);
+    }
+    removeChatLocally(item);
+  };
+
+  const blockFromChat = async (item: any) => {
+    if (!session?.user?.id || item.kind !== 'dm') return;
+    await supabase.from('blocks').insert({ blocker_id: session.user.id, blocked_id: item.otherId });
+    await supabase.from('follows').delete().eq('follower_id', session.user.id).eq('following_id', item.otherId);
+    await supabase.from('follows').delete().eq('follower_id', item.otherId).eq('following_id', session.user.id);
+    removeChatLocally(item);
+  };
+
+  const reportFromChat = async (item: any) => {
+    if (!session?.user?.id) return;
+    const reportedId = item.kind === 'dm' ? item.otherId : item.id;
+    const { error } = await supabase.from('reports').insert({ reporter_id: session.user.id, reported_type: item.kind === 'dm' ? 'user' : 'group', reported_id: reportedId });
+    if (error) {
+      console.error('[messages] report failed:', error.message, error);
+      Alert.alert("Couldn't submit report", error.message);
+      return;
+    }
+    Alert.alert('Reported', "Thanks — we've received your report.");
+  };
+
+  const [chatMenuItem, setChatMenuItem] = useState<any>(null);
+
+  const openChatMenu = (item: any) => {
+    swipeRefs.current[`${item.kind}_${item.id}`]?.close();
+    setChatMenuItem(item);
+  };
+
+  const chatMenuOptions: ActionSheetOption[] = chatMenuItem
+    ? [
+        ...(chatMenuItem.kind === 'dm'
+          ? [{ label: 'Block', icon: 'ban-outline' as const, destructive: true, onPress: () => blockFromChat(chatMenuItem) }]
+          : []),
+        {
+          label: chatMenuItem.kind === 'dm' ? 'Delete chat' : 'Leave group',
+          icon: 'trash-outline',
+          destructive: true,
+          onPress: () =>
+            Alert.alert(chatMenuItem.kind === 'dm' ? 'Delete this chat?' : 'Leave this group?', undefined, [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Confirm', style: 'destructive', onPress: () => deleteChat(chatMenuItem) },
+            ]),
+        },
+        { label: 'Report', icon: 'flag-outline', onPress: () => reportFromChat(chatMenuItem) },
+      ]
+    : [];
+
   if (loading) {
     return (
       <View style={[styles.center, { backgroundColor: colors.bg }]}>
@@ -135,27 +204,42 @@ export default function ChatsScreen() {
         data={chats}
         keyExtractor={(item) => `${item.kind}_${item.id}`}
         contentContainerStyle={{ paddingBottom: 110 }}
-        renderItem={({ item }) => (
-          <TouchableOpacity style={[styles.row, { borderBottomColor: colors.border }]} onPress={() => openChat(item)}>
-            <View>
-              {item.kind === 'group' && !item.avatar ? (
-                <View style={[styles.avatar, styles.groupAvatarFallback, { backgroundColor: item.coverColor || colors.primary }]}>
-                  <Text style={styles.groupAvatarLetter}>{item.title?.[0]?.toUpperCase() || 'G'}</Text>
-                </View>
-              ) : (
-                <Image source={{ uri: item.avatar || 'https://placehold.co/80x80/6C5CE7/fff?text=' + (item.title?.[0] || '?') }} style={styles.avatar} />
+        renderItem={({ item }) => {
+          const key = `${item.kind}_${item.id}`;
+          return (
+            <Swipeable
+              ref={(ref) => {
+                swipeRefs.current[key] = ref;
+              }}
+              renderLeftActions={() => (
+                <TouchableOpacity style={styles.swipeAction} onPress={() => openChatMenu(item)}>
+                  <Ionicons name="trash" size={22} color="#fff" />
+                </TouchableOpacity>
               )}
-              {item.kind === 'dm' && onlineIds.has(item.otherId) && <View style={[styles.onlineDot, { borderColor: colors.bg }]} />}
-            </View>
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Text style={[styles.chatTitle, { color: colors.text }]}>{item.title}</Text>
-                {item.kind === 'group' && <Ionicons name="people" size={13} color={colors.faint} />}
-              </View>
-              <Text style={[styles.lastMessage, { color: colors.subtext }]} numberOfLines={1}>{item.lastText || 'No messages yet'}</Text>
-            </View>
-          </TouchableOpacity>
-        )}
+              overshootLeft={false}
+            >
+              <TouchableOpacity style={[styles.row, { backgroundColor: colors.bg }]} onPress={() => openChat(item)}>
+                <View>
+                  {item.kind === 'group' && !item.avatar ? (
+                    <View style={[styles.avatar, styles.groupAvatarFallback, { backgroundColor: item.coverColor || colors.primary }]}>
+                      <Text style={styles.groupAvatarLetter}>{item.title?.[0]?.toUpperCase() || 'G'}</Text>
+                    </View>
+                  ) : (
+                    <Avatar uri={item.avatar} size={50} />
+                  )}
+                  {item.kind === 'dm' && onlineIds.has(item.otherId) && <View style={[styles.onlineDot, { borderColor: colors.bg }]} />}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={[styles.chatTitle, { color: colors.text }]}>{item.title}</Text>
+                    {item.kind === 'group' && <Ionicons name="people" size={13} color={colors.faint} />}
+                  </View>
+                  <Text style={[styles.lastMessage, { color: colors.subtext }]} numberOfLines={1}>{item.lastText || 'No messages yet'}</Text>
+                </View>
+              </TouchableOpacity>
+            </Swipeable>
+          );
+        }}
         ListEmptyComponent={<Text style={[styles.empty, { color: colors.subtext }]}>No chats yet. Tap + to start one.</Text>}
       />
 
@@ -195,6 +279,13 @@ export default function ChatsScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      <ActionSheet
+        visible={!!chatMenuItem}
+        title={chatMenuItem?.title}
+        options={chatMenuOptions}
+        onClose={() => setChatMenuItem(null)}
+      />
     </View>
   );
 }
@@ -205,7 +296,8 @@ const styles = StyleSheet.create({
   topBar: { paddingTop: 56, paddingBottom: 14, paddingHorizontal: spacing.lg, borderBottomWidth: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   topBarTitle: { fontSize: 22, fontWeight: '800' },
   newBtn: { width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center' },
-  row: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, paddingHorizontal: spacing.lg, gap: 12, borderBottomWidth: 1 },
+  row: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, paddingHorizontal: spacing.lg, gap: 12 },
+  swipeAction: { backgroundColor: '#EF4444', justifyContent: 'center', alignItems: 'center', width: 72 },
   avatar: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#ddd' },
   onlineDot: { position: 'absolute', bottom: 0, right: 0, width: 12, height: 12, borderRadius: 6, backgroundColor: '#22C55E', borderWidth: 2 },
   groupAvatarFallback: { justifyContent: 'center', alignItems: 'center' },

@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { View, Text, TextInput, FlatList, Image, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
 import { spacing } from '@/lib/theme';
+import Avatar from '@/components/Avatar';
 
 export default function NewMessageScreen() {
   const { session } = useAuth();
@@ -83,10 +84,7 @@ export default function NewMessageScreen() {
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
           <TouchableOpacity style={[styles.row, { borderBottomColor: colors.border }]} onPress={() => startChat(item)}>
-            <Image
-              source={{ uri: item.avatar_url || 'https://placehold.co/80x80/6C5CE7/fff?text=' + (item.display_name?.[0] || '?') }}
-              style={styles.avatar}
-            />
+            <Avatar uri={item.avatar_url} size={44} />
             <View>
               <Text style={[styles.displayName, { color: colors.text }]}>{item.display_name}</Text>
               <Text style={[styles.username, { color: colors.subtext }]}>@{item.username}</Text>
@@ -107,7 +105,7 @@ const styles = StyleSheet.create({
   searchWrap: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
   searchInput: { borderRadius: 20, paddingHorizontal: 14, paddingVertical: 10, fontSize: 15 },
   row: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, paddingHorizontal: spacing.lg, gap: 12, borderBottomWidth: 1 },
-  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#ddd' },
+  avatar: { width: 44, height: 44, borderRadius: 22 },
   displayName: { fontWeight: '700', fontSize: 15 },
   username: { fontSize: 13, marginTop: 1 },
   empty: { textAlign: 'center', marginTop: 40 },

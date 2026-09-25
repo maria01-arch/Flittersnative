@@ -1,17 +1,18 @@
 import { TouchableOpacity, StyleSheet, Animated, Platform } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTabBarVisibility, HIDE_DISTANCE } from '@/lib/tab-bar-visibility';
-import { colors } from '@/lib/theme';
+import { useTheme } from '@/lib/ThemeContext';
 
 const ICONS: Record<string, [string, string]> = {
   index: ['home-outline', 'home'],
   search: ['search-outline', 'search'],
-  notifications: ['heart-outline', 'heart'],
-  messages: ['mail-outline', 'mail'],
+  notifications: ['notifications-outline', 'notifications'],
+  messages: ['chatbubble-outline', 'chatbubble'],
   reels: ['play-circle-outline', 'play-circle'],
 };
 
 export default function FloatingTabBar({ state, navigation }: any) {
+  const { colors, isDark } = useTheme();
   const { clamped } = useTabBarVisibility();
   const focusedRoute = state.routes[state.index]?.name;
 
@@ -21,7 +22,20 @@ export default function FloatingTabBar({ state, navigation }: any) {
   const opacity = clamped.interpolate({ inputRange: [0, HIDE_DISTANCE], outputRange: [1, 0] });
 
   return (
-    <Animated.View style={[styles.wrap, { transform: [{ translateY }], opacity }]}>
+    <Animated.View
+      style={[
+        styles.wrap,
+        {
+          transform: [{ translateY }],
+          opacity,
+          backgroundColor: colors.card,
+          shadowColor: isDark ? '#000' : '#000',
+          shadowOpacity: isDark ? 0.4 : 0.12,
+          borderWidth: isDark ? 1 : 0,
+          borderColor: colors.border,
+        },
+      ]}
+    >
       {state.routes.map((route: any, index: number) => {
         const focused = state.index === index;
         const icons = ICONS[route.name] || ['ellipse-outline', 'ellipse'];
@@ -52,12 +66,9 @@ const styles = StyleSheet.create({
     bottom: Platform.OS === 'ios' ? 30 : 18,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#fff',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 6 },
     elevation: 10,

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { View, Text, TextInput, FlatList, Image, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView } from 'react-native';
+import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
+import Avatar from '@/components/Avatar';
 import { spacing } from '@/lib/theme';
 
 export default function SearchScreen() {
@@ -115,7 +116,9 @@ export default function SearchScreen() {
                 {suggested.map((u) => (
                   <View key={u.id} style={[styles.suggestedCard, { borderColor: colors.border }]}>
                     <TouchableOpacity onPress={() => router.push(`/user/${u.id}`)}>
-                      <Image source={{ uri: u.avatar_url || 'https://placehold.co/100x100/6C5CE7/fff?text=' + (u.display_name?.[0] || '?') }} style={styles.suggestedAvatar} />
+                      <View style={{ marginBottom: 8 }}>
+                        <Avatar uri={u.avatar_url} size={56} />
+                      </View>
                       <Text style={[styles.suggestedName, { color: colors.text }]} numberOfLines={1}>{u.display_name}</Text>
                       <Text style={[styles.suggestedUsername, { color: colors.subtext }]} numberOfLines={1}>@{u.username}</Text>
                     </TouchableOpacity>
@@ -137,7 +140,7 @@ export default function SearchScreen() {
             contentContainerStyle={{ paddingBottom: 110 }}
             renderItem={({ item }) => (
               <TouchableOpacity style={[styles.row, { borderBottomColor: colors.border }]} onPress={() => router.push(`/user/${item.id}`)}>
-                <Image source={{ uri: item.avatar_url || 'https://placehold.co/80x80/6C5CE7/fff?text=' + (item.display_name?.[0] || '?') }} style={styles.avatar} />
+                <Avatar uri={item.avatar_url} size={44} />
                 <View>
                   <Text style={[styles.displayName, { color: colors.text }]}>{item.display_name}</Text>
                   <Text style={[styles.username, { color: colors.subtext }]}>@{item.username}</Text>
@@ -163,13 +166,13 @@ const styles = StyleSheet.create({
   trendingPill: { borderRadius: 16, paddingHorizontal: 14, paddingVertical: 8 },
   trendingText: { fontWeight: '600', fontSize: 13 },
   suggestedCard: { width: 130, borderWidth: 1, borderRadius: 14, padding: 12, alignItems: 'center' },
-  suggestedAvatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#ddd', marginBottom: 8 },
+  suggestedAvatar: { width: 56, height: 56, borderRadius: 28, marginBottom: 8 },
   suggestedName: { fontWeight: '700', fontSize: 13, textAlign: 'center' },
   suggestedUsername: { fontSize: 11, marginTop: 1, textAlign: 'center' },
   followBtn: { marginTop: 10, borderRadius: 14, paddingVertical: 6, paddingHorizontal: 14 },
   followBtnText: { color: '#fff', fontWeight: '700', fontSize: 12 },
   row: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, paddingHorizontal: spacing.lg, gap: 12, borderBottomWidth: 1 },
-  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#ddd' },
+  avatar: { width: 44, height: 44, borderRadius: 22 },
   displayName: { fontWeight: '700', fontSize: 15 },
   username: { fontSize: 13, marginTop: 1 },
   empty: { textAlign: 'center', marginTop: 40 },

@@ -3,10 +3,12 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator,
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
-import { colors, spacing } from '@/lib/theme';
+import { spacing } from '@/lib/theme';
+import { useTheme } from '@/lib/ThemeContext';
 
 export default function CreateGroupScreen() {
   const { session } = useAuth();
+  const { colors } = useTheme();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [requireApproval, setRequireApproval] = useState(false);
@@ -36,31 +38,31 @@ export default function CreateGroupScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.topBar}>
+    <View style={[styles.container, { backgroundColor: colors.bg }]}>
+      <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
         <TouchableOpacity onPress={() => router.back()}>
-          <Text style={styles.cancel}>Cancel</Text>
+          <Text style={[styles.cancel, { color: colors.subtext }]}>Cancel</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>New Group</Text>
+        <Text style={[styles.title, { color: colors.text }]}>New Group</Text>
         <TouchableOpacity onPress={create} disabled={!name.trim() || saving}>
-          {saving ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={[styles.create, !name.trim() && { opacity: 0.4 }]}>Create</Text>}
+          {saving ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={[styles.create, { color: colors.primary }, !name.trim() && { opacity: 0.4 }]}>Create</Text>}
         </TouchableOpacity>
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>Group Name</Text>
-        <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="e.g. Weekend Runners" placeholderTextColor={colors.faint} />
+        <Text style={[styles.label, { color: colors.subtext }]}>Group Name</Text>
+        <TextInput style={[styles.input, { borderColor: colors.border, color: colors.text }]} value={name} onChangeText={setName} placeholder="e.g. Weekend Runners" placeholderTextColor={colors.faint} />
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>Description</Text>
-        <TextInput style={[styles.input, styles.multiline]} value={description} onChangeText={setDescription} placeholder="What's this group about?" placeholderTextColor={colors.faint} multiline />
+        <Text style={[styles.label, { color: colors.subtext }]}>Description</Text>
+        <TextInput style={[styles.input, styles.multiline, { borderColor: colors.border, color: colors.text }]} value={description} onChangeText={setDescription} placeholder="What's this group about?" placeholderTextColor={colors.faint} multiline />
       </View>
 
       <View style={styles.switchRow}>
         <View>
-          <Text style={styles.label}>Require approval to join</Text>
-          <Text style={styles.hint}>Off = anyone can join instantly</Text>
+          <Text style={[styles.label, { color: colors.subtext }]}>Require approval to join</Text>
+          <Text style={[styles.hint, { color: colors.faint }]}>Off = anyone can join instantly</Text>
         </View>
         <Switch value={requireApproval} onValueChange={setRequireApproval} trackColor={{ true: colors.primary }} />
       </View>
@@ -69,15 +71,15 @@ export default function CreateGroupScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 56, paddingHorizontal: spacing.lg, paddingBottom: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
-  cancel: { color: colors.subtext, fontSize: 16 },
-  title: { fontSize: 16, fontWeight: '700', color: colors.text },
-  create: { color: colors.primary, fontSize: 16, fontWeight: '700' },
+  container: { flex: 1 },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 56, paddingHorizontal: spacing.lg, paddingBottom: spacing.md, borderBottomWidth: 1 },
+  cancel: { fontSize: 16 },
+  title: { fontSize: 16, fontWeight: '700' },
+  create: { fontSize: 16, fontWeight: '700' },
   field: { paddingHorizontal: spacing.lg, marginTop: spacing.lg },
-  label: { fontSize: 13, color: colors.subtext, marginBottom: 6, fontWeight: '600' },
-  hint: { fontSize: 12, color: colors.faint, marginTop: 2 },
-  input: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12, fontSize: 15, color: colors.text },
+  label: { fontSize: 13, marginBottom: 6, fontWeight: '600' },
+  hint: { fontSize: 12, marginTop: 2 },
+  input: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 15 },
   multiline: { minHeight: 80, textAlignVertical: 'top' },
   switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.lg, marginTop: spacing.xl },
 });

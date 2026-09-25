@@ -3,7 +3,7 @@ import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, Activity
 import { useLocalSearchParams, router } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
-import { colors, spacing } from '@/lib/theme';
+import { useTheme } from '@/lib/ThemeContext';
 import { useAuth } from '@/lib/AuthContext';
 import CommentCard from '@/components/CommentCard';
 import { loadCommentTree } from '@/lib/comments';
@@ -11,6 +11,7 @@ import { loadCommentTree } from '@/lib/comments';
 export default function CommentThreadScreen() {
   const { id, postId } = useLocalSearchParams();
   const { session } = useAuth();
+  const { colors } = useTheme();
   const [root, setRoot] = useState<any>(null);
   const [replies, setReplies] = useState<any[]>([]);
   const [text, setText] = useState('');
@@ -71,19 +72,19 @@ export default function CommentThreadScreen() {
 
   if (loading || !root) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#1DA1F2" />
+      <View style={[styles.center, { backgroundColor: colors.bg }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}>
-      <View style={styles.topBar}>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}>
+      <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
         <TouchableOpacity onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
-        <Text style={styles.topBarTitle}>Reply</Text>
+        <Text style={[styles.topBarTitle, { color: colors.text }]}>Reply</Text>
         <View style={{ width: 24 }} />
       </View>
       <FlatList
@@ -95,18 +96,18 @@ export default function CommentThreadScreen() {
         renderItem={({ item }) => (
           <CommentCard comment={item} postId={postId as string} onLike={(c) => toggleLike(c)} onRepost={(c) => toggleRepost(c)} />
         )}
-        ListEmptyComponent={<Text style={styles.empty}>No replies yet.</Text>}
+        ListEmptyComponent={<Text style={[styles.empty, { color: colors.subtext }]}>No replies yet.</Text>}
       />
-      <View style={styles.inputBar}>
+      <View style={[styles.inputBar, { borderTopColor: colors.border, backgroundColor: colors.card }]}>
         <TextInput
-          style={styles.input}
+          style={[styles.input, { backgroundColor: colors.inputBg, color: colors.text }]}
           placeholder="Write a reply..."
-          placeholderTextColor="#888"
+          placeholderTextColor={colors.faint}
           value={text}
           onChangeText={setText}
         />
         <TouchableOpacity onPress={submitReply} disabled={sending || !text.trim()}>
-          <Ionicons name="send" size={22} color={text.trim() ? '#1DA1F2' : '#ccc'} />
+          <Ionicons name="send" size={22} color={text.trim() ? colors.primary : colors.faint} />
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -114,10 +115,10 @@ export default function CommentThreadScreen() {
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bg },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 50, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.border },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 50, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1 },
   topBarTitle: { fontSize: 17, fontWeight: 'bold' },
-  empty: { textAlign: 'center', marginTop: 30, color: colors.subtext },
-  inputBar: { flexDirection: 'row', alignItems: 'center', padding: 10, borderTopWidth: 1, borderTopColor: colors.border, gap: 10, backgroundColor: colors.card },
-  input: { flex: 1, backgroundColor: '#F3F4F6', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, fontSize: 14 },
+  empty: { textAlign: 'center', marginTop: 30 },
+  inputBar: { flexDirection: 'row', alignItems: 'center', padding: 10, borderTopWidth: 1, gap: 10 },
+  input: { flex: 1, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, fontSize: 14 },
 });

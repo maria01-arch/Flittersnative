@@ -1,15 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Image } from 'react-native';
+import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Image, LayoutAnimation } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
 import MessageBubble from '@/components/MessageBubble';
+import { setActiveConversation } from '@/lib/activeChatTracker';
+import Avatar from '@/components/Avatar';
+import VerifiedBadge from '@/components/VerifiedBadge';
+import VoiceRecordingBar from '@/components/VoiceRecordingBar';
+import VoicePreviewBar from '@/components/VoicePreviewBar';
 import { spacing } from '@/lib/theme';
 import { useOnlinePresence } from '@/lib/usePresence';
 import { useAppForeground } from '@/lib/useAppForeground';
+import { useVoiceRecorder } from '@/lib/useVoiceRecorder';
+import { uploadVoiceNote, uploadImage } from '@/lib/upload';
+
+// Required on Android under the old architecture for LayoutAnimation to do
+// anything; on the New Architecture (confirmed active in this project via
+// app.json) it's already a guaranteed no-op, and calling it anyway just
+// prints a console warning on every load for no benefit — so the call
+// itself is skipped rather than guarded.
+const animateNextChange = () => LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
 
 const PAGE_SIZE = 30;
 
@@ -17,6 +33,15 @@ export default function ConversationScreen() {
   const { id, name, otherId, otherAvatar } = useLocalSearchParams();
   const { session } = useAuth();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+
+  // Lets the push notification handler know this conversation is the one
+  // currently open, so a message arriving for it doesn't also pop a
+  // foreground banner on top of the thread you're already looking at.
+  useEffect(() => {
+    setActiveConversation(id as string);
+    return () => setActiveConversation(null);
+  }, [id]);
   const [messages, setMessages] = useState<any[]>([]);
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
@@ -28,6 +53,24 @@ export default function ConversationScreen() {
   const [otherLastRead, setOtherLastRead] = useState<string | null>(null);
   const channelRef = useRef<any>(null);
   const connectRef = useRef<() => void>(() => {});
+  const voice = useVoiceRecorder();
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [voicePreview, setVoicePreview] = useState<{ uri: string; duration: number } | null>(null);
+  const [otherProfile, setOtherProfile] = useState<any>(null);
+
+  useEffect(() => {
+    if (!otherId) return;
+    // The top bar previously only had whatever was passed as route params
+    // (name, avatar) — never the full profile, so there was no verified
+    // badge data available at all. Fetching it directly means the badge
+    // shows correctly regardless of which screen linked into this chat.
+    supabase
+      .from('profiles')
+      .select('display_name,avatar_url,verified,is_authentic')
+      .eq('id', otherId)
+      .single()
+      .then(({ data }) => setOtherProfile(data));
+  }, [otherId]);
 
   const onlineIds = useOnlinePresence(session?.user?.id);
   const [typingUsers, setTypingUsers] = useState<Record<string, string>>({});
@@ -246,11 +289,72 @@ export default function ConversationScreen() {
     return () => clearInterval(interval);
   }, []);
 
+  // A pending/failed message lives in `messages` state immediately, tagged
+  // with these fields, and is swapped for the real row once the server
+  // confirms it — or left in place with _failed so the bubble can offer a
+  // retry instead of the message just vanishing.
+  const makeTempMessage = (fields: any) => ({
+    id: `temp_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    conversation_id: id,
+    sender_id: session?.user?.id,
+    created_at: new Date().toISOString(),
+    read_at: null,
+    reactions: [],
+    _pending: true,
+    ...fields,
+  });
+
+  const addOptimistic = (msg: any) => {
+    animateNextChange();
+    setMessages((prev) => [msg, ...prev]);
+  };
+
+  const resolveOptimistic = (tempId: string, data: any) => {
+    animateNextChange();
+    setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...data, reactions: [] } : m)));
+  };
+
+  const failOptimistic = (tempId: string) => {
+    animateNextChange();
+    setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, _pending: false, _failed: true } : m)));
+  };
+
+  const broadcastSent = (data: any) => {
+    channelRef.current?.send({ type: 'broadcast', event: 'new_message', payload: data });
+    if (otherId) {
+      supabase.channel(`inbox_${otherId}`).send({ type: 'broadcast', event: 'ping', payload: {} });
+    }
+  };
+
+  const sendTextMessage = async (content: string, replyTo: any, tempId?: string) => {
+    const { data, error } = await supabase
+      .from('messages')
+      .insert({
+        conversation_id: id,
+        sender_id: session!.user.id,
+        content,
+        reply_to: replyTo?.content || null,
+        reply_to_id: replyTo?.id || null,
+      })
+      .select()
+      .single();
+
+    if (error || !data) {
+      console.error('[send] insert failed:', error?.message, error);
+      if (tempId) failOptimistic(tempId);
+      return;
+    }
+    if (tempId) resolveOptimistic(tempId, data);
+    else addIncomingMessage(data);
+    broadcastSent(data);
+  };
+
   const send = async () => {
     if (!text.trim() || !session?.user?.id) return;
     const content = text.trim();
 
     if (editingId) {
+      animateNextChange();
       setMessages((prev) => prev.map((m) => (m.id === editingId ? { ...m, content } : m)));
       const editId = editingId;
       setEditingId(null);
@@ -263,31 +367,137 @@ export default function ConversationScreen() {
     setText('');
     setReplyingTo(null);
 
-    const { data } = await supabase
+    // Drop the bubble in immediately — the network round trip happens in
+    // the background and reconciles silently when it lands.
+    const temp = makeTempMessage({
+      content,
+      reply_to: replyTo?.content || null,
+      reply_to_id: replyTo?.id || null,
+    });
+    addOptimistic(temp);
+    sendTextMessage(content, replyTo, temp.id);
+  };
+
+  const pickImage = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      console.warn('[pickImage] media library permission denied');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8 });
+    if (!result.canceled && result.assets?.[0]) setImageUri(result.assets[0].uri);
+  };
+
+  const sendImageMessage = async (localUri: string, tempId: string) => {
+    const url = await uploadImage(localUri, `messages/${session!.user.id}`);
+    if (!url) {
+      console.error('[sendImage] upload returned no url');
+      failOptimistic(tempId);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('messages')
+      .insert({ conversation_id: id, sender_id: session!.user.id, content: '', image_url: url })
+      .select()
+      .single();
+
+    if (error || !data) {
+      console.error('[sendImage] insert failed:', error?.message, error);
+      failOptimistic(tempId);
+      return;
+    }
+    resolveOptimistic(tempId, data);
+    broadcastSent(data);
+  };
+
+  const sendImage = () => {
+    if (!imageUri || !session?.user?.id) return;
+    const localUri = imageUri;
+    setImageUri(null);
+    // image_url is set to the local file immediately so the picked photo
+    // shows in the bubble at full quality right away — it's swapped for
+    // the R2 url once the upload finishes, invisibly to the eye since it's
+    // the same picture either way.
+    const temp = makeTempMessage({ content: '', image_url: localUri });
+    addOptimistic(temp);
+    sendImageMessage(localUri, temp.id);
+  };
+
+  const startVoice = async () => {
+    const ok = await voice.start();
+    if (!ok) console.warn('[startVoice] permission denied or failed to start');
+  };
+  const cancelVoice = async () => {
+    await voice.cancel();
+  };
+
+  // Recording stops into a local preview instead of sending straight away —
+  // you can hear exactly what was captured (and confirm it recorded
+  // anything at all) before it ever touches the network.
+  const stopToPreview = async () => {
+    const result = await voice.stop();
+    if (!result) {
+      console.error('[stopToPreview] recorder returned no result (no uri)');
+      return;
+    }
+    setVoicePreview(result);
+  };
+  const discardPreview = () => setVoicePreview(null);
+
+  const sendVoiceMessage = async (localUri: string, duration: number, tempId: string) => {
+    const voiceUrl = await uploadVoiceNote(localUri);
+    if (!voiceUrl) {
+      console.error('[sendVoiceNote] upload returned no url — see [Upload] log above for the server response');
+      failOptimistic(tempId);
+      return;
+    }
+
+    const { data, error } = await supabase
       .from('messages')
       .insert({
         conversation_id: id,
-        sender_id: session.user.id,
-        content,
-        reply_to: replyTo?.content || null,
-        reply_to_id: replyTo?.id || null,
+        sender_id: session!.user.id,
+        content: '',
+        is_voice: true,
+        voice_url: voiceUrl,
+        voice_duration: duration,
       })
       .select()
       .single();
 
-    if (data) {
-      addIncomingMessage(data);
-      // Broadcast the full message straight to the other side — no waiting
-      // on Postgres replication lag for it to feel instant on their end.
-      channelRef.current?.send({ type: 'broadcast', event: 'new_message', payload: data });
-      // Also ping the recipient's personal inbox channel directly, so
-      // their Chats list updates instantly even if they're not currently
-      // inside this conversation — that channel only otherwise updates
-      // via Postgres replication, which can lag.
-      if (otherId) {
-        supabase.channel(`inbox_${otherId}`).send({ type: 'broadcast', event: 'ping', payload: {} });
-      }
+    if (error || !data) {
+      console.error('[sendVoiceNote] insert failed:', error?.message, error);
+      failOptimistic(tempId);
+      return;
     }
+    resolveOptimistic(tempId, data);
+    broadcastSent(data);
+  };
+
+  const confirmSendPreview = () => {
+    if (!voicePreview || !session?.user?.id) return;
+    const { uri, duration } = voicePreview;
+    setVoicePreview(null);
+    // Local file plays back immediately in the bubble while the upload
+    // happens in the background.
+    const temp = makeTempMessage({
+      content: '',
+      is_voice: true,
+      voice_url: uri,
+      voice_duration: duration,
+    });
+    addOptimistic(temp);
+    sendVoiceMessage(uri, duration, temp.id);
+  };
+
+  const retryMessage = (m: any) => {
+    if (!m._failed) return;
+    animateNextChange();
+    setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, _pending: true, _failed: false } : x)));
+    if (m.is_voice) sendVoiceMessage(m.voice_url, m.voice_duration, m.id);
+    else if (m.image_url) sendImageMessage(m.image_url, m.id);
+    else sendTextMessage(m.content, null, m.id);
   };
 
   const handleReply = (m: any) => {
@@ -352,18 +562,32 @@ export default function ConversationScreen() {
   }
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}>
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: colors.bg }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      // The old fixed 24px only accounted for gesture-nav phones (a thin
+      // strip). On phones still using the classic 3-button nav bar, that
+      // bar reserves real, variable height at the bottom — without
+      // including it here, the keyboard (and the input bar sitting above
+      // it) ended up rendered partly underneath it. insets.bottom is 0 on
+      // gesture-nav phones (so this is unchanged there) and the real bar
+      // height on 3-button phones.
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24 + insets.bottom}
+    >
       <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
         <TouchableOpacity onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <TouchableOpacity style={styles.topBarCenter} onPress={() => otherId && router.push(`/user/${otherId}`)}>
           <View>
-            <Image source={{ uri: (otherAvatar as string) || 'https://placehold.co/80x80/6C5CE7/fff?text=?' }} style={styles.topBarAvatar} />
+            <Avatar uri={otherProfile?.avatar_url || (otherAvatar as string)} size={34} />
             {isOtherOnline && <View style={[styles.onlineDot, { borderColor: colors.card }]} />}
           </View>
           <View>
-            <Text style={[styles.topBarTitle, { color: colors.text }]}>{name || 'Chat'}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Text style={[styles.topBarTitle, { color: colors.text }]}>{otherProfile?.display_name || name || 'Chat'}</Text>
+              <VerifiedBadge verified={otherProfile?.verified} isAuthentic={otherProfile?.is_authentic} size={12} />
+            </View>
             <Text style={[styles.statusText, { color: isOtherTyping ? colors.primary : colors.subtext }]}>
               {isOtherTyping ? 'typing...' : isOtherOnline ? 'Active now' : ''}
             </Text>
@@ -385,6 +609,11 @@ export default function ConversationScreen() {
         inverted
         onEndReached={loadMore}
         onEndReachedThreshold={0.4}
+        // Without this, the keyboard being up meant the first touch on a
+        // message bubble was consumed just dismissing the keyboard instead
+        // of reaching the swipe-to-reply gesture — so dragging a message
+        // while the text box was focused silently did nothing.
+        keyboardShouldPersistTaps="handled"
         ListFooterComponent={loadingMore ? <ActivityIndicator style={{ marginVertical: 10 }} color={colors.primary} /> : null}
         contentContainerStyle={{ paddingVertical: 8 }}
         renderItem={({ item, index }) => {
@@ -407,6 +636,7 @@ export default function ConversationScreen() {
               onDelete={handleDelete}
               onReact={handleReact}
               onPin={handlePin}
+              onRetry={retryMessage}
             />
           );
         }}
@@ -431,22 +661,50 @@ export default function ConversationScreen() {
           </TouchableOpacity>
         </View>
       )}
-      <View style={[styles.inputBar, { borderTopColor: colors.border, backgroundColor: colors.card }]}>
-        <TextInput
-          style={[styles.input, { backgroundColor: colors.inputBg, color: colors.text }]}
-          placeholder="Message..."
-          placeholderTextColor={colors.faint}
-          value={text}
-          onChangeText={(t) => {
-            setText(t);
-            sendTyping();
-          }}
-          multiline
-        />
-        <TouchableOpacity onPress={send} disabled={!text.trim()}>
-          <Ionicons name="send" size={22} color={text.trim() ? colors.primary : colors.faint} />
-        </TouchableOpacity>
-      </View>
+      {voice.recording ? (
+        <VoiceRecordingBar seconds={voice.seconds} onCancel={cancelVoice} onSend={stopToPreview} />
+      ) : voicePreview ? (
+        <VoicePreviewBar uri={voicePreview.uri} duration={voicePreview.duration} onDiscard={discardPreview} onSend={confirmSendPreview} />
+      ) : (
+        <>
+          {imageUri && (
+            <View style={[styles.imagePreviewBar, { borderTopColor: colors.border, backgroundColor: colors.card }]}>
+              <Image source={{ uri: imageUri }} style={styles.imagePreviewThumb} />
+              <TouchableOpacity onPress={() => setImageUri(null)} style={styles.imagePreviewRemove}>
+                <Ionicons name="close-circle" size={22} color={colors.subtext} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={sendImage} style={[styles.sendImageBtn, { backgroundColor: colors.primary }]}>
+                <Ionicons name="send" size={16} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          )}
+          <View style={[styles.inputBar, { borderTopColor: colors.border, backgroundColor: colors.card, paddingBottom: 10 + insets.bottom }]}>
+            <TouchableOpacity onPress={pickImage}>
+              <Ionicons name="image-outline" size={26} color={colors.primary} />
+            </TouchableOpacity>
+            <TextInput
+              style={[styles.input, { backgroundColor: colors.inputBg, color: colors.text }]}
+              placeholder="Message..."
+              placeholderTextColor={colors.faint}
+              value={text}
+              onChangeText={(t) => {
+                setText(t);
+                sendTyping();
+              }}
+              multiline
+            />
+            {text.trim() ? (
+              <TouchableOpacity onPress={send} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="send" size={26} color={colors.primary} />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity onPress={startVoice} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="mic" size={28} color={colors.primary} />
+              </TouchableOpacity>
+            )}
+          </View>
+        </>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -455,7 +713,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 50, paddingHorizontal: spacing.lg, paddingBottom: 12, borderBottomWidth: 1 },
   topBarCenter: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  topBarAvatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#ddd' },
+  topBarAvatar: { width: 34, height: 34, borderRadius: 17 },
   onlineDot: { position: 'absolute', bottom: 0, right: 0, width: 10, height: 10, borderRadius: 5, backgroundColor: '#22C55E', borderWidth: 2 },
   topBarTitle: { fontSize: 16, fontWeight: '700' },
   statusText: { fontSize: 11, marginTop: 1, minHeight: 14 },
@@ -465,6 +723,10 @@ const styles = StyleSheet.create({
   previewBar: { flexDirection: 'row', alignItems: 'center', padding: 10, paddingHorizontal: spacing.lg, borderTopWidth: 1, gap: 10 },
   previewLabel: { fontSize: 12, fontWeight: '700' },
   previewText: { fontSize: 13, marginTop: 1 },
-  inputBar: { flexDirection: 'row', alignItems: 'center', padding: 10, borderTopWidth: 1, gap: 10 },
-  input: { flex: 1, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, fontSize: 14, maxHeight: 120, minHeight: 38 },
+  inputBar: { flexDirection: 'row', alignItems: 'center', padding: 12, borderTopWidth: 1, gap: 12 },
+  input: { flex: 1, borderRadius: 22, paddingHorizontal: 16, paddingVertical: 11, fontSize: 16, maxHeight: 120, minHeight: 44 },
+  imagePreviewBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingTop: 10, borderTopWidth: 1, gap: 10 },
+  imagePreviewThumb: { width: 52, height: 52, borderRadius: 10, backgroundColor: '#00000010' },
+  imagePreviewRemove: { marginLeft: -14, marginTop: -30 },
+  sendImageBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginLeft: 'auto' },
 });

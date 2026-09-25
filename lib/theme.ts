@@ -17,17 +17,20 @@ export const lightColors = {
 export const darkColors = {
   primary: '#8B7CF6',
   primaryDark: '#6C5CE7',
-  bg: '#000000',
-  card: '#000000',
-  border: '#242628',
-  text: '#F7F8FA',
-  subtext: '#9CA3AF',
-  faint: '#6B7280',
+  // Blue-black instead of pure midnight black — same family as GitHub's
+  // dark theme rather than true #000, which reads as harsher and makes
+  // elevation (card vs. background) impossible to distinguish.
+  bg: '#0B0F17',
+  card: '#111726',
+  border: '#232B3B',
+  text: '#F1F3F8',
+  subtext: '#9AA4B7',
+  faint: '#5B6478',
   like: '#F91880',
   repost: '#00BA7C',
   danger: '#F87171',
-  bubbleTheirs: '#1C1E21',
-  inputBg: '#1C1E21',
+  bubbleTheirs: '#151D2C',
+  inputBg: '#151D2C',
 };
 
 export const colors = lightColors;
