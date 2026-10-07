@@ -51,6 +51,15 @@ Deno.serve(async (req) => {
 
     if (table === 'notifications') {
       if (record.type === 'comment_reaction') return new Response('ok');
+      if (record.type === 'login_alert') {
+        // Self-alert — there's no "someone else" here, so this doesn't
+        // fit the actor-name-based NOTIFICATION_TEXT map below at all.
+        const platform = record.meta_platform === 'ios' ? 'an iPhone' : record.meta_platform === 'android' ? 'an Android device' : 'a device';
+        const location = record.meta_location ? ` near ${record.meta_location}` : '';
+        const tokens = await tokensFor(record.user_id);
+        await sendPush(tokens, 'New sign-in', `Your account was just signed into on ${platform}${location}.`, { type: 'login_alert' });
+        return new Response('ok');
+      }
       const { data: actor } = await supabase.from('profiles').select('display_name').eq('id', record.actor_id).single();
       const textFn = NOTIFICATION_TEXT[record.type];
       if (!textFn || !actor) return new Response('ignored');

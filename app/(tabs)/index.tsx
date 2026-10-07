@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, RefreshControl, ActivityIndicator, TouchableOpacity, ScrollView, Animated } from 'react-native';
+import { View, Text, StyleSheet, RefreshControl, ActivityIndicator, TouchableOpacity, ScrollView, Animated, Alert } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
+import { usePreferences } from '@/lib/PreferencesContext';
+import { canPerform, permissionDeniedMessage } from '@/lib/permissions';
 import PostCard from '@/components/PostCard';
 import ReelPreviewThumb from '@/components/ReelPreviewThumb';
 import { spacing } from '@/lib/theme';
 import AppTopBar, { TOP_BAR_HEIGHT } from '@/components/AppTopBar';
+import StatusBarScrim from '@/components/StatusBarScrim';
+import { FeedSkeleton } from '@/components/Skeleton';
 import { useHideTabBarOnScroll, useTabBarVisibility, HIDE_DISTANCE } from '@/lib/tab-bar-visibility';
 
 const AnimatedFlatList = Animated.createAnimatedComponent(require('react-native').FlatList);
@@ -17,6 +21,10 @@ const PAGE_SIZE = 10;
 export default function HomeScreen() {
   const { session } = useAuth();
   const { colors } = useTheme();
+  const { showReposts, feedInterest } = usePreferences();
+  // Cached across loadInitial -> loadMore within one session so "Following"
+  // pagination doesn't refetch the follow list on every page.
+  const followingIdsRef = useRef<string[] | null>(null);
   const [posts, setPosts] = useState<any[]>([]);
   const [previewReels, setPreviewReels] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -33,6 +41,26 @@ export default function HomeScreen() {
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
   const { clamped } = useTabBarVisibility();
   const fabTranslate = clamped.interpolate({ inputRange: [0, HIDE_DISTANCE], outputRange: [0, 100] });
+
+  // A "two children with the same key" warning means two entries in
+  // `posts` ended up with an identical feedKey — likely a post the
+  // pagination cursor re-returned on a later page (possible whenever two
+  // posts share the same created_at down to the stored precision, which
+  // isn't rare with bulk-inserted or fast-succession posts). Applied
+  // wherever posts actually get set, rather than chasing the exact
+  // upstream cause, since this guarantees the symptom can't recur
+  // regardless of which path produced the duplicate.
+  const dedupeByFeedKey = (items: any[]) => {
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const item of items) {
+      const key = item.feedKey || item.id;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+    }
+    return out;
+  };
 
   const decoratePosts = (data: any[]) =>
     data.map((p: any) => ({
@@ -81,28 +109,68 @@ export default function HomeScreen() {
       });
 
   const loadInitial = useCallback(async () => {
-    const [{ data, error }, { data: repostsData }] = await Promise.all([
-      supabase
-        .from('posts')
-        .select('*,author:profiles(*),likes(user_id),reposts(user_id),comments(id)')
-        .order('created_at', { ascending: false })
-        .limit(PAGE_SIZE),
-      supabase
+    // "Following" only shows posts (and reposts) from people you follow —
+    // resolved once per load and cached in followingIdsRef so loadMore
+    // doesn't have to look it up again for every page.
+    let followingIds: string[] | null = null;
+    if (feedInterest === 'following') {
+      if (!session?.user?.id) {
+        setPosts([]);
+        setHasMore(false);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+      const { data: followRows } = await supabase.from('follows').select('following_id').eq('follower_id', session.user.id);
+      followingIds = (followRows || []).map((f: any) => f.following_id);
+      followingIdsRef.current = followingIds;
+      if (followingIds.length === 0) {
+        // Following nobody yet — an empty result here isn't an error, it's
+        // just genuinely nothing to show until they follow someone.
+        setPosts([]);
+        setHasMore(false);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+    } else {
+      followingIdsRef.current = null;
+    }
+
+    let postsQuery = supabase
+      .from('posts')
+      .select('*,author:profiles(*),likes(user_id),reposts(user_id),comments(id)')
+      .order('created_at', { ascending: false })
+      .limit(PAGE_SIZE);
+    if (followingIds) postsQuery = postsQuery.in('user_id', followingIds);
+
+    const queries: any[] = [postsQuery];
+    if (showReposts) {
+      // "Following" repost semantics: reposts made BY someone you follow
+      // (the original post's author doesn't have to be someone you follow
+      // too) — that's the standard meaning of "X you follow reposted this".
+      let repostsQuery = supabase
         .from('reposts')
         .select('id,created_at,content,user:profiles(*),post:posts(*,author:profiles(*),likes(user_id),reposts(user_id),comments(id))')
         .order('created_at', { ascending: false })
-        .limit(PAGE_SIZE),
-    ]);
+        .limit(PAGE_SIZE);
+      if (followingIds) repostsQuery = repostsQuery.in('user_id', followingIds);
+      queries.push(repostsQuery);
+    }
+
+    const results = await Promise.all(queries);
+    const { data, error } = results[0];
+    const repostsData = showReposts ? results[1].data : [];
     if (!error && data) {
       const merged = [...decoratePosts(data), ...decorateReposts(repostsData)].sort(
         (a, b) => new Date(b.sortTime).getTime() - new Date(a.sortTime).getTime()
       );
-      setPosts(merged);
+      setPosts(dedupeByFeedKey(merged));
       setHasMore(data.length === PAGE_SIZE);
     }
     setLoading(false);
     setRefreshing(false);
-  }, [session]);
+  }, [session, showReposts, feedInterest]);
 
   const loadMore = async () => {
     if (loadingMore || !hasMore || posts.length === 0) return;
@@ -112,14 +180,16 @@ export default function HomeScreen() {
     // without needing a second, independent cursor for "further back"
     // reposts too.
     const oldest = posts.filter((p) => !p.isRepost).pop() || posts[posts.length - 1];
-    const { data, error } = await supabase
+    let query = supabase
       .from('posts')
       .select('*,author:profiles(*),likes(user_id),reposts(user_id),comments(id)')
       .lt('created_at', oldest.sortTime || oldest.created_at)
       .order('created_at', { ascending: false })
       .limit(PAGE_SIZE);
+    if (followingIdsRef.current) query = query.in('user_id', followingIdsRef.current);
+    const { data, error } = await query;
     if (!error && data) {
-      setPosts((prev) => [...prev, ...decoratePosts(data)]);
+      setPosts((prev) => dedupeByFeedKey([...prev, ...decoratePosts(data)]));
       setHasMore(data.length === PAGE_SIZE);
     }
     setLoadingMore(false);
@@ -172,6 +242,13 @@ export default function HomeScreen() {
 
   const toggleRepost = async (post: any) => {
     if (!session?.user?.id || repostInFlight.current.has(post.id)) return;
+    if (!post.reposted_by_me) {
+      const allowed = await canPerform(post.author?.who_can_repost, post.user_id, session.user.id);
+      if (!allowed) {
+        Alert.alert("Can't repost", permissionDeniedMessage('who can repost their posts', post.author?.who_can_repost));
+        return;
+      }
+    }
     repostInFlight.current.add(post.id);
     setPosts((prev) =>
       prev.map((p) =>
@@ -197,8 +274,8 @@ export default function HomeScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.center, { backgroundColor: colors.bg }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
+      <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: TOP_BAR_HEIGHT }}>
+        <FeedSkeleton />
       </View>
     );
   }
@@ -220,8 +297,15 @@ export default function HomeScreen() {
         )}
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
+        initialNumToRender={6}
+        maxToRenderPerBatch={6}
+        windowSize={7}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-        ListEmptyComponent={<Text style={[styles.empty, { color: colors.subtext }]}>No posts yet. Be the first!</Text>}
+        ListEmptyComponent={
+          <Text style={[styles.empty, { color: colors.subtext }]}>
+            {feedInterest === 'following' ? "No posts from people you follow yet — follow a few people to see them here." : 'No posts yet. Be the first!'}
+          </Text>
+        }
         onScroll={onScroll}
         scrollEventThrottle={1}
         onEndReached={loadMore}
@@ -247,6 +331,7 @@ export default function HomeScreen() {
           <Ionicons name="add" size={28} color="#fff" />
         </TouchableOpacity>
       </Animated.View>
+      <StatusBarScrim />
       <AppTopBar title="Flitters" />
     </View>
   );

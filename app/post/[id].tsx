@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
@@ -9,6 +9,8 @@ import { useAuth } from '@/lib/AuthContext';
 import PostCard from '@/components/PostCard';
 import CommentCard from '@/components/CommentCard';
 import { loadCommentTree } from '@/lib/comments';
+import { canPerform, permissionDeniedMessage } from '@/lib/permissions';
+import { PostSkeleton, ListSkeleton } from '@/components/Skeleton';
 
 export default function PostDetailScreen() {
   const { id, focusComment } = useLocalSearchParams();
@@ -74,8 +76,15 @@ export default function PostDetailScreen() {
 
   const toggleRepost = async () => {
     if (!session?.user?.id || !post || mutationInFlight.current) return;
-    mutationInFlight.current = true;
     const wasReposted = post.reposted_by_me;
+    if (!wasReposted) {
+      const allowed = await canPerform(post.author?.who_can_repost, post.user_id, session.user.id);
+      if (!allowed) {
+        Alert.alert("Can't repost", permissionDeniedMessage('who can repost their posts', post.author?.who_can_repost));
+        return;
+      }
+    }
+    mutationInFlight.current = true;
     setPost((p: any) => ({ ...p, reposted_by_me: !wasReposted, reposts_count: wasReposted ? p.reposts_count - 1 : p.reposts_count + 1 }));
     if (wasReposted) {
       await supabase.from('reposts').delete().eq('post_id', post.id).eq('user_id', session.user.id);
@@ -111,7 +120,12 @@ export default function PostDetailScreen() {
 
   const submitCommentInFlight = useRef(false);
   const submitComment = async () => {
-    if (!text.trim() || !session?.user?.id || submitCommentInFlight.current) return;
+    if (!text.trim() || !session?.user?.id || !post || submitCommentInFlight.current) return;
+    const allowed = await canPerform(post.author?.who_can_comment, post.user_id, session.user.id);
+    if (!allowed) {
+      Alert.alert("Can't comment", permissionDeniedMessage('who can comment on their posts', post.author?.who_can_comment));
+      return;
+    }
     submitCommentInFlight.current = true;
     setSending(true);
     await supabase.from('comments').insert({ post_id: id, user_id: session.user.id, content: text.trim() });
@@ -126,8 +140,11 @@ export default function PostDetailScreen() {
 
   if (loading || !post) {
     return (
-      <View style={[styles.center, { backgroundColor: colors.bg }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
+      <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: 60 }}>
+        <PostSkeleton withMedia />
+        <View style={{ marginTop: 16 }}>
+          <ListSkeleton count={4} />
+        </View>
       </View>
     );
   }

@@ -8,6 +8,7 @@ import { InboxProvider } from '@/lib/InboxContext';
 import { ThemeProvider as AppThemeProvider, useTheme } from '@/lib/ThemeContext';
 import { PreferencesProvider } from '@/lib/PreferencesContext';
 import { usePushNotifications } from '@/lib/usePushNotifications';
+import { isAddingAccountMode } from '@/lib/accounts';
 import { View, ActivityIndicator } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
@@ -23,7 +24,7 @@ function RootLayoutNav() {
     const inAuthGroup = segments[0] === 'login' || segments[0] === 'landing' || segments[0] === 'signup';
     if (!session && !inAuthGroup) {
       router.replace('/landing');
-    } else if (session && inAuthGroup) {
+    } else if (session && inAuthGroup && !isAddingAccountMode()) {
       router.replace('/(tabs)');
     }
   }, [session, initializing, segments]);
@@ -66,6 +67,7 @@ function RootLayoutNav() {
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         <Stack.Screen name="compose" options={{ presentation: 'modal', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
         <Stack.Screen name="user/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="user/[id]/following" options={{ headerShown: false }} />
         <Stack.Screen name="post/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="conversation/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="comment/[id]" options={{ headerShown: false }} />
@@ -77,6 +79,8 @@ function RootLayoutNav() {
         <Stack.Screen name="new-message" options={{ presentation: 'modal', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
         <Stack.Screen name="flitters-ai" options={{ headerShown: false }} />
         <Stack.Screen name="signup" options={{ headerShown: false }} />
+        <Stack.Screen name="legal/[doc]" options={{ headerShown: false }} />
+        <Stack.Screen name="switch-account" options={{ headerShown: false }} />
       </Stack>
     </RNThemeProvider>
   );

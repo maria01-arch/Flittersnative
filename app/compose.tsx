@@ -7,6 +7,7 @@ import * as Crypto from 'expo-crypto';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import { uploadImage, uploadVideo } from '@/lib/upload';
+import { checkVideoLimits } from '@/lib/videoLimits';
 import { spacing } from '@/lib/theme';
 import { useTheme } from '@/lib/ThemeContext';
 
@@ -33,6 +34,11 @@ export default function ComposeScreen() {
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
     if (asset.type === 'video') {
+      const issue = checkVideoLimits(asset);
+      if (issue) {
+        Alert.alert("Video too big", issue);
+        return;
+      }
       updateSegment(key, { videoUri: asset.uri, imageUri: null });
     } else {
       updateSegment(key, { imageUri: asset.uri, videoUri: null });
@@ -50,6 +56,12 @@ export default function ComposeScreen() {
 
     const threadId = segments.length > 1 ? Crypto.randomUUID() : null;
     const rows: any[] = [];
+    // A video posted to the feed is also a reel — people browsing Reels
+    // shouldn't miss content just because it was uploaded from the
+    // composer instead of a dedicated "create reel" flow (which this app
+    // doesn't have). Collected alongside the post rows below, then
+    // written to `reels` right after the posts succeed.
+    const reelRows: any[] = [];
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
       if (!seg.text.trim() && !seg.imageUri && !seg.videoUri) continue;
@@ -77,15 +89,25 @@ export default function ComposeScreen() {
         thread_id: threadId,
         thread_order: threadId ? i : null,
       });
+      if (videoUrl) reelRows.push({ user_id: session.user.id, video_url: videoUrl, caption: seg.text.trim() });
     }
 
     const { error } = await supabase.from('posts').insert(rows);
-    setPosting(false);
     if (error) {
+      setPosting(false);
       console.error('[compose] post insert failed:', error.message, error);
       Alert.alert("Couldn't post", error.message);
       return;
     }
+    if (reelRows.length) {
+      // Best-effort: the post itself already succeeded, so a failure
+      // here shouldn't be reported as the whole post having failed —
+      // worst case, that video just doesn't additionally show up in
+      // Reels, which isn't worth blocking or re-alerting over.
+      const { error: reelErr } = await supabase.from('reels').insert(reelRows);
+      if (reelErr) console.error('[compose] reel mirror insert failed:', reelErr.message, reelErr);
+    }
+    setPosting(false);
     router.back();
   };
 

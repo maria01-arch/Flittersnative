@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
 import Avatar from '@/components/Avatar';
 import { spacing } from '@/lib/theme';
+import { ListSkeleton } from '@/components/Skeleton';
 
 export default function SearchScreen() {
   const { session } = useAuth();
@@ -133,7 +134,7 @@ export default function SearchScreen() {
         </ScrollView>
       ) : (
         <>
-          {loading && <ActivityIndicator style={{ marginTop: 20 }} color={colors.primary} />}
+          {loading && <ListSkeleton count={6} />}
           <FlatList
             data={results}
             keyExtractor={(item) => item.id}

@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import { spacing } from '@/lib/theme';
 import { useTheme } from '@/lib/ThemeContext';
+import { ListSkeleton } from '@/components/Skeleton';
 import Avatar from '@/components/Avatar';
 
 const iconFor = (type: string, colors: any) => {
@@ -13,8 +14,11 @@ const iconFor = (type: string, colors: any) => {
   if (type === 'repost') return { name: 'repeat', color: colors.repost };
   if (type === 'comment') return { name: 'chatbubble', color: colors.primary };
   if (type === 'follow') return { name: 'person-add', color: '#F59E0B' };
+  if (type === 'login_alert') return { name: 'shield-checkmark', color: colors.primary };
   return { name: 'notifications', color: colors.faint };
 };
+
+const platformLabel = (p: string) => (p === 'ios' ? 'an iPhone' : p === 'android' ? 'an Android device' : 'a device');
 
 const labelFor = (n: any) => {
   const name = n.actor?.display_name || 'Someone';
@@ -22,6 +26,7 @@ const labelFor = (n: any) => {
   if (n.type === 'repost') return `${name} reposted your post`;
   if (n.type === 'comment') return `${name} commented on your post`;
   if (n.type === 'follow') return `${name} followed you`;
+  if (n.type === 'login_alert') return `New sign-in on ${platformLabel(n.meta_platform)}${n.meta_location ? ' near ' + n.meta_location : ''}`;
   return `${name} interacted with your content`;
 };
 
@@ -57,8 +62,8 @@ export default function NotificationsScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.center, { backgroundColor: colors.bg }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
+      <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: 60 }}>
+        <ListSkeleton />
       </View>
     );
   }
@@ -85,6 +90,8 @@ export default function NotificationsScreen() {
               onPress={() => {
                 if (['like', 'repost', 'comment'].includes(item.type) && item.post_id) {
                   router.push(`/post/${item.post_id}`);
+                } else if (item.type === 'login_alert') {
+                  router.push('/settings');
                 } else if (item.actor?.id) {
                   router.push(`/user/${item.actor.id}`);
                 }

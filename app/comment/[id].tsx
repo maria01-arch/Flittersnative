@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
@@ -7,6 +7,7 @@ import { useTheme } from '@/lib/ThemeContext';
 import { useAuth } from '@/lib/AuthContext';
 import CommentCard from '@/components/CommentCard';
 import { loadCommentTree } from '@/lib/comments';
+import { canPerform, permissionDeniedMessage } from '@/lib/permissions';
 
 export default function CommentThreadScreen() {
   const { id, postId } = useLocalSearchParams();
@@ -55,6 +56,15 @@ export default function CommentThreadScreen() {
 
   const submitReply = async () => {
     if (!text.trim() || !session?.user?.id || !root) return;
+    // A reply is still a comment on the original post, so it's gated by
+    // that post's who_can_comment — fetched here rather than on every
+    // screen load, since replying is the only moment it matters.
+    const { data: post } = await supabase.from('posts').select('user_id,author:profiles!user_id(who_can_comment)').eq('id', postId).single();
+    const allowed = await canPerform((post?.author as any)?.who_can_comment, post?.user_id, session.user.id);
+    if (!allowed) {
+      Alert.alert("Can't comment", permissionDeniedMessage('who can comment on their posts', (post?.author as any)?.who_can_comment));
+      return;
+    }
     setSending(true);
     await supabase.from('comments').insert({
       post_id: postId,
@@ -91,10 +101,28 @@ export default function CommentThreadScreen() {
         data={replies}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={
-          <CommentCard comment={root} postId={postId as string} navigable={false} onLike={(c) => toggleLike(c, true)} onRepost={(c) => toggleRepost(c, true)} />
+          <CommentCard
+            comment={root}
+            postId={postId as string}
+            currentUserId={session?.user?.id}
+            navigable={false}
+            onLike={(c) => toggleLike(c, true)}
+            onRepost={(c) => toggleRepost(c, true)}
+            // Deleting the root comment of this thread leaves nothing left
+            // to show here — the post's own comment list (one screen back)
+            // is what actually reflects the deletion.
+            onDelete={() => router.back()}
+          />
         }
         renderItem={({ item }) => (
-          <CommentCard comment={item} postId={postId as string} onLike={(c) => toggleLike(c)} onRepost={(c) => toggleRepost(c)} />
+          <CommentCard
+            comment={item}
+            postId={postId as string}
+            currentUserId={session?.user?.id}
+            onLike={(c) => toggleLike(c)}
+            onRepost={(c) => toggleRepost(c)}
+            onDelete={(c) => setReplies((prev) => prev.filter((x) => x.id !== c.id))}
+          />
         )}
         ListEmptyComponent={<Text style={[styles.empty, { color: colors.subtext }]}>No replies yet.</Text>}
       />

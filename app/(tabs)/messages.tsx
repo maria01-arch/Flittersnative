@@ -12,10 +12,14 @@ import { useAppForeground } from '@/lib/useAppForeground';
 import { spacing } from '@/lib/theme';
 import Avatar from '@/components/Avatar';
 import ActionSheet, { ActionSheetOption } from '@/components/ActionSheet';
+import ReportModal from '@/components/ReportModal';
+import { ListSkeleton } from '@/components/Skeleton';
 
 function previewText(msg: any): string | null {
   if (!msg) return null;
   if (msg.is_voice) return '🎤 Voice message';
+  if (msg.is_sticker) return '🖼️ Sticker';
+  if (msg.video_url) return '🎥 Video';
   if (msg.image_url) return '📷 Photo';
   return msg.content || null;
 }
@@ -51,7 +55,7 @@ export default function ChatsScreen() {
 
       const { data: msgs } = await supabase
         .from('messages')
-        .select('conversation_id,content,is_voice,image_url,created_at')
+        .select('conversation_id,content,is_voice,is_sticker,video_url,image_url,created_at')
         .in('conversation_id', convIds)
         .order('created_at', { ascending: false })
         .limit(500);
@@ -78,7 +82,7 @@ export default function ChatsScreen() {
       const { data: groups } = await supabase.from('groups').select('*').in('id', groupIds);
       const { data: gmsgs } = await supabase
         .from('group_messages')
-        .select('group_id,content,is_voice,image_url,created_at')
+        .select('group_id,content,is_voice,is_sticker,video_url,image_url,created_at')
         .in('group_id', groupIds)
         .order('created_at', { ascending: false })
         .limit(500);
@@ -146,16 +150,19 @@ export default function ChatsScreen() {
     removeChatLocally(item);
   };
 
-  const reportFromChat = async (item: any) => {
-    if (!session?.user?.id) return;
-    const reportedId = item.kind === 'dm' ? item.otherId : item.id;
-    const { error } = await supabase.from('reports').insert({ reporter_id: session.user.id, reported_type: item.kind === 'dm' ? 'user' : 'group', reported_id: reportedId });
-    if (error) {
-      console.error('[messages] report failed:', error.message, error);
-      Alert.alert("Couldn't submit report", error.message);
-      return;
-    }
-    Alert.alert('Reported', "Thanks — we've received your report.");
+  // Was inserting {reported_type, reported_id} — columns the real table
+  // doesn't have. The real schema (matching the webapp) only has
+  // reported_user_id / reported_post_id / reported_message_id /
+  // reported_reel_id — there's no "report a group" concept at all, so
+  // that option is now DM-only below; a specific bad message in a group
+  // can be reported directly instead (see MessageActionSheet).
+  const [reportTarget, setReportTarget] = useState<any>(null);
+  const submitChatReport = async (reason: string, details: string) => {
+    if (!session?.user?.id || !reportTarget) return;
+    const { error } = await supabase
+      .from('reports')
+      .insert({ reporter_id: session.user.id, reported_user_id: reportTarget.otherId, reason, details: details || null });
+    if (error) throw error;
   };
 
   const [chatMenuItem, setChatMenuItem] = useState<any>(null);
@@ -180,14 +187,14 @@ export default function ChatsScreen() {
               { text: 'Confirm', style: 'destructive', onPress: () => deleteChat(chatMenuItem) },
             ]),
         },
-        { label: 'Report', icon: 'flag-outline', onPress: () => reportFromChat(chatMenuItem) },
+        ...(chatMenuItem.kind === 'dm' ? [{ label: 'Report', icon: 'flag-outline' as const, onPress: () => setReportTarget(chatMenuItem) }] : []),
       ]
     : [];
 
   if (loading) {
     return (
-      <View style={[styles.center, { backgroundColor: colors.bg }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
+      <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: 60 }}>
+        <ListSkeleton />
       </View>
     );
   }
@@ -286,6 +293,7 @@ export default function ChatsScreen() {
         options={chatMenuOptions}
         onClose={() => setChatMenuItem(null)}
       />
+      <ReportModal visible={!!reportTarget} onClose={() => setReportTarget(null)} onSubmit={submitChatReport} />
     </View>
   );
 }

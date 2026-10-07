@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Image, LayoutAnimation } from 'react-native';
+import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Image, LayoutAnimation, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -12,11 +12,14 @@ import MessageBubble from '@/components/MessageBubble';
 import { setActiveGroup } from '@/lib/activeChatTracker';
 import VoiceRecordingBar from '@/components/VoiceRecordingBar';
 import VoicePreviewBar from '@/components/VoicePreviewBar';
+import StickerTray from '@/components/StickerTray';
+import ReportModal from '@/components/ReportModal';
 import { spacing } from '@/lib/theme';
 
 import { useAppForeground } from '@/lib/useAppForeground';
 import { useVoiceRecorder } from '@/lib/useVoiceRecorder';
-import { uploadVoiceNote, uploadImage } from '@/lib/upload';
+import { uploadVoiceNote, uploadImage, uploadVideo } from '@/lib/upload';
+import { checkVideoLimits } from '@/lib/videoLimits';
 
 // Required on Android under the old architecture for LayoutAnimation to do
 // anything; on the New Architecture (confirmed active in this project via
@@ -50,7 +53,9 @@ export default function GroupChatScreen() {
   const myProfileRef = useRef<any>(null);
   const voice = useVoiceRecorder();
   const [imageUri, setImageUri] = useState<string | null>(null);
+  const [videoUri, setVideoUri] = useState<string | null>(null);
   const [voicePreview, setVoicePreview] = useState<{ uri: string; duration: number } | null>(null);
+  const [showStickerTray, setShowStickerTray] = useState(false);
 
   const [typingUsers, setTypingUsers] = useState<Record<string, string>>({});
   const typingLastSeen = useRef<Record<string, number>>({});
@@ -318,8 +323,19 @@ export default function GroupChatScreen() {
       console.warn('[pickImage] media library permission denied');
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8 });
-    if (!result.canceled && result.assets?.[0]) setImageUri(result.assets[0].uri);
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images', 'videos'], quality: 0.8 });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    if (asset.type === 'video') {
+      const issue = checkVideoLimits(asset);
+      if (issue) {
+        Alert.alert('Video too big', issue);
+        return;
+      }
+      setVideoUri(asset.uri);
+    } else {
+      setImageUri(asset.uri);
+    }
   };
 
   const sendImageMessage = async (localUri: string, tempId: string) => {
@@ -352,6 +368,59 @@ export default function GroupChatScreen() {
     const temp = makeTempMessage({ content: '', image_url: localUri });
     addOptimistic(temp);
     sendImageMessage(localUri, temp.id);
+  };
+
+  const sendVideoMessage = async (localUri: string, tempId: string) => {
+    const url = await uploadVideo(localUri, `messages/${session!.user.id}`);
+    if (!url) {
+      console.error('[sendVideo] upload returned no url');
+      failOptimistic(tempId);
+      return;
+    }
+    const { data, error } = await supabase
+      .from('group_messages')
+      .insert({ group_id: id, sender_id: session!.user.id, content: '', video_url: url })
+      .select()
+      .single();
+    if (error || !data) {
+      console.error('[sendVideo] insert failed:', error?.message, error);
+      failOptimistic(tempId);
+      return;
+    }
+    const withAuthor = resolveOptimistic(tempId, data);
+    channelRef.current?.send({ type: 'broadcast', event: 'new_message', payload: withAuthor });
+  };
+
+  const sendVideo = () => {
+    if (!videoUri || !session?.user?.id) return;
+    const localUri = videoUri;
+    setVideoUri(null);
+    const temp = makeTempMessage({ content: '', video_url: localUri });
+    addOptimistic(temp);
+    sendVideoMessage(localUri, temp.id);
+  };
+
+  const sendStickerMessage = async (stickerUrl: string, tempId: string) => {
+    const { data, error } = await supabase
+      .from('group_messages')
+      .insert({ group_id: id, sender_id: session!.user.id, content: '', is_sticker: true, sticker_url: stickerUrl })
+      .select()
+      .single();
+    if (error || !data) {
+      console.error('[sendSticker] insert failed:', error?.message, error);
+      failOptimistic(tempId);
+      return;
+    }
+    const withAuthor = resolveOptimistic(tempId, data);
+    channelRef.current?.send({ type: 'broadcast', event: 'new_message', payload: withAuthor });
+  };
+
+  const sendSticker = (stickerUrl: string) => {
+    if (!session?.user?.id) return;
+    setShowStickerTray(false);
+    const temp = makeTempMessage({ content: '', is_sticker: true, sticker_url: stickerUrl });
+    addOptimistic(temp);
+    sendStickerMessage(stickerUrl, temp.id);
   };
 
   const startVoice = async () => {
@@ -421,6 +490,8 @@ export default function GroupChatScreen() {
     animateNextChange();
     setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, _pending: true, _failed: false } : x)));
     if (m.is_voice) sendVoiceMessage(m.voice_url, m.voice_duration, m.id);
+    else if (m.is_sticker) sendStickerMessage(m.sticker_url, m.id);
+    else if (m.video_url) sendVideoMessage(m.video_url, m.id);
     else if (m.image_url) sendImageMessage(m.image_url, m.id);
     else sendTextMessage(m.content, null, m.id);
   };
@@ -467,6 +538,18 @@ export default function GroupChatScreen() {
     } else {
       await supabase.from('pinned_messages').insert({ group_id: id, message_id: m.id, pinned_by: session.user.id });
     }
+  };
+
+  const [reportMessage, setReportMessage] = useState<any>(null);
+  const handleReportMessage = (m: any) => setReportMessage(m);
+  const submitMessageReport = async (reason: string, details: string) => {
+    if (!session?.user?.id || !reportMessage) return;
+    // Same reported_message_id column the webapp uses for both DM and
+    // group message reports — it isn't tied to one specific table.
+    const { error } = await supabase
+      .from('reports')
+      .insert({ reporter_id: session.user.id, reported_message_id: reportMessage.id, reason, details: details || null });
+    if (error) throw error;
   };
 
   const pinnedMessage = messages.find((m) => pinnedIds.has(m.id));
@@ -541,6 +624,7 @@ export default function GroupChatScreen() {
               onReact={handleReact}
               onPin={handlePin}
               onRetry={retryMessage}
+              onReport={handleReportMessage}
             />
           );
         }}
@@ -582,9 +666,25 @@ export default function GroupChatScreen() {
               </TouchableOpacity>
             </View>
           )}
+          {videoUri && (
+            <View style={[styles.imagePreviewBar, { borderTopColor: colors.border, backgroundColor: colors.card }]}>
+              <View style={[styles.imagePreviewThumb, styles.videoPreviewThumb, { backgroundColor: colors.inputBg }]}>
+                <Ionicons name="videocam" size={22} color={colors.subtext} />
+              </View>
+              <TouchableOpacity onPress={() => setVideoUri(null)} style={styles.imagePreviewRemove}>
+                <Ionicons name="close-circle" size={22} color={colors.subtext} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={sendVideo} style={[styles.sendImageBtn, { backgroundColor: colors.primary }]}>
+                <Ionicons name="send" size={16} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          )}
           <View style={[styles.inputBar, { borderTopColor: colors.border, backgroundColor: colors.card, paddingBottom: 10 + insets.bottom }]}>
             <TouchableOpacity onPress={pickImage}>
               <Ionicons name="image-outline" size={26} color={colors.primary} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowStickerTray((v) => !v)}>
+              <Ionicons name={showStickerTray ? 'happy' : 'happy-outline'} size={26} color={colors.primary} />
             </TouchableOpacity>
             <TextInput
               style={[styles.input, { backgroundColor: colors.inputBg, color: colors.text }]}
@@ -606,8 +706,17 @@ export default function GroupChatScreen() {
               </TouchableOpacity>
             )}
           </View>
+          {showStickerTray && session?.user?.id && (
+            <StickerTray
+              userId={session.user.id}
+              onSelectEmoji={(e) => setText((t) => t + e)}
+              onSelectSticker={sendSticker}
+              onClose={() => setShowStickerTray(false)}
+            />
+          )}
         </>
       )}
+      <ReportModal visible={!!reportMessage} onClose={() => setReportMessage(null)} onSubmit={submitMessageReport} />
     </KeyboardAvoidingView>
   );
 }
@@ -628,6 +737,7 @@ const styles = StyleSheet.create({
   input: { flex: 1, borderRadius: 22, paddingHorizontal: 16, paddingVertical: 11, fontSize: 16, maxHeight: 120, minHeight: 44 },
   imagePreviewBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingTop: 10, borderTopWidth: 1, gap: 10 },
   imagePreviewThumb: { width: 52, height: 52, borderRadius: 10, backgroundColor: '#00000010' },
+  videoPreviewThumb: { justifyContent: 'center', alignItems: 'center' },
   imagePreviewRemove: { marginLeft: -14, marginTop: -30 },
   sendImageBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginLeft: 'auto' },
 });

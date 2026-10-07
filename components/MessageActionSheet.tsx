@@ -14,6 +14,7 @@ export default function MessageActionSheet({
   onDelete,
   onReact,
   onPin,
+  onReport,
   isPinned,
 }: {
   visible: boolean;
@@ -25,6 +26,7 @@ export default function MessageActionSheet({
   onDelete: () => void;
   onReact: (emoji: string) => void;
   onPin: () => void;
+  onReport?: () => void;
   isPinned: boolean;
 }) {
   const { colors } = useTheme();
@@ -63,6 +65,12 @@ export default function MessageActionSheet({
             <TouchableOpacity style={styles.row} onPress={onDelete}>
               <Ionicons name="trash-outline" size={20} color="#EF4444" />
               <Text style={[styles.rowText, { color: '#EF4444' }]}>Delete</Text>
+            </TouchableOpacity>
+          )}
+          {!isMine && onReport && (
+            <TouchableOpacity style={styles.row} onPress={onReport}>
+              <Ionicons name="flag-outline" size={20} color="#EF4444" />
+              <Text style={[styles.rowText, { color: '#EF4444' }]}>Report</Text>
             </TouchableOpacity>
           )}
         </Pressable>

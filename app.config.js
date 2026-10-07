@@ -34,7 +34,29 @@ module.exports = {
       predictiveBackGestureEnabled: false,
       package: "com.xchordlabs.flitters",
       useNextNotificationsApi: true,
-      googleServicesFile: "./google-services.json"
+      googleServicesFile: "./google-services.json",
+      // Every one of these came from a package's default Android manifest
+      // (expo-audio/expo-video defensively requesting background media
+      // continuation, expo-notifications requesting boot-rescheduling),
+      // not from anything Flitters actually does: nothing plays audio or
+      // video in the background, nothing needs to run at boot, and
+      // nothing draws over other apps. Each also requires its own
+      // justification in Play Console's Data Safety form, so unused ones
+      // are pure liability with no upside.
+      //
+      // WAKE_LOCK is deliberately NOT in this list anymore. It used to be,
+      // and blocking it silently broke push notifications: Firebase Cloud
+      // Messaging (what actually delivers pushes on Android) takes a brief
+      // wake lock when a message arrives, and without the permission that
+      // throws a SecurityException instead of showing the notification.
+      // It's a normal-protection permission with no Play Console
+      // declaration needed, so leaving it in costs nothing.
+      blockedPermissions: [
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
+      ]
     },
     web: {
       output: "static",
@@ -48,7 +70,15 @@ module.exports = {
           image: "./assets/images/flitters-logo.png",
           imageWidth: 160,
           resizeMode: "contain",
-          backgroundColor: "#ffffff",
+          // Was pure white — same washout problem as the landing page had,
+          // but the landing page's fix (an outline traced from the actual
+          // image, several tinted copies layered behind it) can't be
+          // applied here: this screen is drawn by the OS from this one
+          // static image before any JavaScript has run, so there's no
+          // code running to layer anything. A background a shade off pure
+          // white is the honest fix available at this layer — a real
+          // outline would need a version of the PNG with one baked in.
+          backgroundColor: "#F4F2FA",
           dark: {
             backgroundColor: "#0B0F17"
           }
@@ -72,6 +102,12 @@ module.exports = {
         {
           microphonePermission: "Allow Flitters to access your microphone."
         }
+      ],
+      [
+        "expo-location",
+        {
+          locationWhenInUsePermission: "Allow Flitters to use your location to power suggestions and help keep your account secure. Location is only ever used while the app is open."
+        }
       ]
     ],
     experiments: {
@@ -81,7 +117,7 @@ module.exports = {
     extra: {
       router: {},
       eas: {
-        projectId: "8593f64a-594b-4a8c-b73f-36ff25480d9d"
+        projectId: "ef10ac98-f4c6-49f4-9696-ec91ea12ba2c"
       }
     }
   }

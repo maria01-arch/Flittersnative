@@ -1,42 +1,54 @@
-import { useState, useEffect } from 'react';
-import { useLocalSearchParams } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
 import { spacing } from '@/lib/theme';
 import { useTheme } from '@/lib/ThemeContext';
+import { persistCurrentSession, setAddingAccountMode } from '@/lib/accounts';
 
+// This used to have its own inline "sign up" mode (a bare
+// username/email/password form, toggled in place instead of navigating
+// anywhere) that duplicated — poorly — what the real signup wizard at
+// /signup already does properly, and its submit path didn't actually work.
+// "Don't have an account?" now just takes you to that real wizard, the
+// same way landing.tsx's own "Create Account" button already does.
 export default function LoginScreen() {
-  const { mode } = useLocalSearchParams();
   const { colors } = useTheme();
-  const [isSignUp, setIsSignUp] = useState(mode === 'signup');
-
-  useEffect(() => {
-    setIsSignUp(mode === 'signup');
-  }, [mode]);
+  const { addingAccount } = useLocalSearchParams<{ addingAccount?: string }>();
+  const isAddingAccount = addingAccount === '1';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Whatever way this screen closes (success, back button), adding-account
+  // mode ends with it — otherwise the root layout would keep letting a
+  // signed-in person sit on the login screen forever.
+  useEffect(() => () => setAddingAccountMode(false), []);
+
   const handleSubmit = async () => {
     setError('');
-    if (!email.trim() || !password.trim()) { setError('Email and password required'); return; }
-    if (isSignUp && !username.trim()) { setError('Username required'); return; }
+    if (!email.trim() || !password.trim()) {
+      setError('Email and password required');
+      return;
+    }
     setLoading(true);
     try {
-      if (isSignUp) {
-        const { error } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-          options: { data: { username: username.toLowerCase().replace(/\s/g, ''), display_name: username } },
-        });
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-        if (error) throw error;
+      // Adding a second (or third...) account: whatever's currently
+      // signed in has to be saved to the switcher BEFORE this call, since
+      // the moment sign-in succeeds, the client's one active session
+      // becomes this new account — there's no getting the old one's
+      // tokens back after that point.
+      if (isAddingAccount) await persistCurrentSession();
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error) throw error;
+      if (isAddingAccount) {
+        // Drop the switcher/login screens off the stack so back doesn't
+        // land on them, then show the new account's feed.
+        router.dismissAll();
+        router.replace('/(tabs)');
       }
     } catch (e: any) {
       setError(e.message || 'Something went wrong');
@@ -47,22 +59,8 @@ export default function LoginScreen() {
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: colors.bg }]}>
       <Text style={[styles.logo, { color: colors.primary }]}>Flitters</Text>
-      <Text style={[styles.subtitle, { color: colors.subtext }]}>{isSignUp ? 'Create your account' : 'Welcome back'}</Text>
+      <Text style={[styles.subtitle, { color: colors.subtext }]}>{isAddingAccount ? 'Log in to another account' : 'Welcome back'}</Text>
 
-      {isSignUp && (
-        <TextInput
-          style={[styles.input, { borderColor: colors.border, color: colors.text }]}
-          placeholder="Username"
-          placeholderTextColor={colors.faint}
-          autoCapitalize="none"
-          autoCorrect={false}
-          value={username}
-          // Usernames are always lowercase (matches how they're stored/shown
-          // everywhere else, e.g. @xchord.space-style handles) — forcing it
-          // as you type avoids a mismatch surprise at signup.
-          onChangeText={(t) => setUsername(t.toLowerCase())}
-        />
-      )}
       <TextInput
         style={[styles.input, { borderColor: colors.border, color: colors.text }]}
         placeholder="Email"
@@ -77,9 +75,14 @@ export default function LoginScreen() {
           style={[styles.passwordInput, { color: colors.text }]}
           placeholder="Password"
           placeholderTextColor={colors.faint}
+          autoCapitalize="none"
           secureTextEntry={!showPassword}
           value={password}
-          onChangeText={setPassword}
+          // Passwords are strictly lowercase, same rule as signup — typing
+          // an uppercase letter here just gets folded down automatically
+          // rather than silently creating a password that doesn't match
+          // what the person thinks they set.
+          onChangeText={(t) => setPassword(t.toLowerCase())}
         />
         <TouchableOpacity onPress={() => setShowPassword((v) => !v)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.faint} />
@@ -89,13 +92,11 @@ export default function LoginScreen() {
       {error ? <Text style={[styles.error, { color: colors.danger }]}>{error}</Text> : null}
 
       <TouchableOpacity style={[styles.button, { backgroundColor: colors.primary }]} onPress={handleSubmit} disabled={loading}>
-        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{isSignUp ? 'Sign Up' : 'Log In'}</Text>}
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Log In</Text>}
       </TouchableOpacity>
 
-      <TouchableOpacity onPress={() => setIsSignUp(!isSignUp)}>
-        <Text style={[styles.switchText, { color: colors.primary }]}>
-          {isSignUp ? 'Already have an account? Log in' : "Don't have an account? Sign up"}
-        </Text>
+      <TouchableOpacity onPress={() => router.push(isAddingAccount ? '/signup?addingAccount=1' : '/signup')}>
+        <Text style={[styles.switchText, { color: colors.primary }]}>Don't have an account? Sign up</Text>
       </TouchableOpacity>
     </KeyboardAvoidingView>
   );

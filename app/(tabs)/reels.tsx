@@ -1,13 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { View, FlatList, ActivityIndicator, StyleSheet, LayoutChangeEvent } from 'react-native';
+import { View, FlatList, ActivityIndicator, StyleSheet, LayoutChangeEvent, Dimensions } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import ReelItem from '@/components/ReelItem';
+import StatusBarScrim from '@/components/StatusBarScrim';
+import { ReelSkeleton } from '@/components/Skeleton';
+import { usePreferences } from '@/lib/PreferencesContext';
 import { Alert } from 'react-native';
+
+const { height: SCREEN_H } = Dimensions.get('window');
 
 export default function ReelsScreen() {
   const { session } = useAuth();
+  const { dataSaverMode } = usePreferences();
+  // Data saver (default on): only the active reel plus one neighbor each
+  // side ever has a real video source. Off: widens to two neighbors each
+  // side for a snappier feel on fast swiping — still bounded, not "load
+  // everything the list has rendered", which is the bug that was fixed
+  // last round.
+  const preloadRadius = dataSaverMode ? 1 : 2;
   const [reels, setReels] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -35,7 +47,9 @@ export default function ReelsScreen() {
   useFocusEffect(
     useCallback(() => {
       setTabFocused(true);
+      load();
       return () => setTabFocused(false);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
   );
 
@@ -56,10 +70,6 @@ export default function ReelsScreen() {
     );
     setLoading(false);
   };
-
-  useEffect(() => {
-    load();
-  }, []);
 
   const toggleLike = async (reel: any) => {
     if (!session?.user?.id) return;
@@ -99,17 +109,25 @@ export default function ReelsScreen() {
   }).current;
 
   if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#fff" />
-      </View>
-    );
+    return <ReelSkeleton height={pageHeight || SCREEN_H} />;
   }
 
   return (
     <View style={styles.container} onLayout={onLayout}>
+      <StatusBarScrim />
       {pageHeight > 0 && (
         <FlatList
+          // Toggling Data Saver changes preloadRadius, but a ReelItem
+          // already on screen was built with whatever shouldLoad value it
+          // had at mount time — expo-video's player doesn't reliably react
+          // to its source argument changing after the fact, so without
+          // forcing a remount here, flipping the setting would silently do
+          // nothing for anything already rendered (exactly the "no
+          // difference" symptom). This key forces every item to be
+          // recreated fresh the moment the setting changes, so it's
+          // actually guaranteed to take effect rather than depending on
+          // video-player internals.
+          key={dataSaverMode ? 'saver-on' : 'saver-off'}
           data={reels}
           keyExtractor={(item) => item.id}
           pagingEnabled
@@ -124,11 +142,20 @@ export default function ReelsScreen() {
           // Matches the measured height exactly, so FlatList's paging math
           // and each item's actual rendered size never disagree.
           getItemLayout={(_, index) => ({ length: pageHeight, offset: pageHeight * index, index })}
+          // Defaults render roughly 10 screens' worth of items — for a
+          // feed of full-screen videos, that alone meant up to 10 videos
+          // existed (and, before the fix in ReelItem, were downloading)
+          // at once. This keeps only the active item plus one on each
+          // side actually mounted.
+          initialNumToRender={preloadRadius * 2 + 1}
+          maxToRenderPerBatch={preloadRadius * 2 + 1}
+          windowSize={preloadRadius * 2 + 1}
           renderItem={({ item, index }) => (
             <ReelItem
               reel={item}
               height={pageHeight}
               active={tabFocused && index === activeIndex}
+              shouldLoad={Math.abs(index - activeIndex) <= preloadRadius}
               isMine={item.user_id === session?.user?.id}
               onLike={toggleLike}
               onDelete={deleteReel}

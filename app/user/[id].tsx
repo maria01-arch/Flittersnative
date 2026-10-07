@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Animated, Alert, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Animated, Alert } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { useLocalSearchParams, router } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
@@ -8,24 +9,30 @@ import PostCard from '@/components/PostCard';
 import VerifiedBadge from '@/components/VerifiedBadge';
 import Avatar from '@/components/Avatar';
 import ActionSheet, { ActionSheetOption } from '@/components/ActionSheet';
+import ReportModal from '@/components/ReportModal';
 import { spacing } from '@/lib/theme';
 import { useTheme } from '@/lib/ThemeContext';
+import { canPerform, permissionDeniedMessage } from '@/lib/permissions';
+import StatusBarScrim from '@/components/StatusBarScrim';
+import { ProfileHeaderSkeleton, FeedSkeleton } from '@/components/Skeleton';
+import { sendFollowRequest, cancelFollowRequest, hasPendingRequest } from '@/lib/followRequests';
 
 const AnimatedFlatList = Animated.createAnimatedComponent(require('react-native').FlatList);
 
 export default function UserProfileScreen() {
   const { id } = useLocalSearchParams();
   const { session } = useAuth();
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const [profile, setProfile] = useState<any>(null);
   const [posts, setPosts] = useState<any[]>([]);
   const [reposts, setReposts] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'posts' | 'reposts' | 'videos'>('posts');
   const [isFollowing, setIsFollowing] = useState(false);
+  const [requested, setRequested] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [pillWidth, setPillWidth] = useState<number | null>(null);
   const scrollY = useRef(new Animated.Value(0)).current;
-  const { width: windowWidth } = useWindowDimensions();
 
   const load = async () => {
     const [{ data: profileData }, { data: postsData }, { data: followData }, { data: repostsData }] = await Promise.all([
@@ -43,6 +50,11 @@ export default function UserProfileScreen() {
     if (session?.user?.id) {
       const { data: blockData } = await supabase.from('blocks').select('id').eq('blocker_id', session.user.id).eq('blocked_id', id).maybeSingle();
       setIsBlocked(!!blockData);
+      if (profileData?.is_private && !followData) {
+        setRequested(await hasPendingRequest(session.user.id, id as string));
+      } else {
+        setRequested(false);
+      }
     }
     setProfile(profileData);
     setPosts(
@@ -110,6 +122,13 @@ export default function UserProfileScreen() {
 
   const toggleRepost = async (post: any) => {
     if (!session?.user?.id || repostInFlight.current.has(post.id)) return;
+    if (!post.reposted_by_me) {
+      const allowed = await canPerform(post.author?.who_can_repost, post.user_id, session.user.id);
+      if (!allowed) {
+        Alert.alert("Can't repost", permissionDeniedMessage('who can repost their posts', post.author?.who_can_repost));
+        return;
+      }
+    }
     repostInFlight.current.add(post.id);
     applyRepostFlag(setPosts, post);
     applyRepostFlag(setReposts, post);
@@ -127,6 +146,19 @@ export default function UserProfileScreen() {
 
   const toggleFollow = async () => {
     if (!session?.user?.id) return;
+    // A private profile you don't already follow needs a request the
+    // owner approves, not an instant follow — everything else (public
+    // profiles, and unfollowing/cancelling either way) stays instant.
+    if (profile?.is_private && !isFollowing) {
+      if (requested) {
+        setRequested(false);
+        await cancelFollowRequest(session.user.id, id as string);
+      } else {
+        setRequested(true);
+        await sendFollowRequest(session.user.id, id as string);
+      }
+      return;
+    }
     setIsFollowing(!isFollowing);
     if (isFollowing) {
       await supabase.from('follows').delete().eq('follower_id', session.user.id).eq('following_id', id);
@@ -150,30 +182,21 @@ export default function UserProfileScreen() {
     }
   };
 
-  const reportUser = async () => {
+  // Was inserting {reported_type, reported_id} — columns the real table
+  // doesn't have (it matches the webapp's shape: reported_user_id plus a
+  // required reason), so this was silently failing every single time.
+  const [reportOpen, setReportOpen] = useState(false);
+  const submitUserReport = async (reason: string, details: string) => {
     if (!session?.user?.id) return;
-    const { error } = await supabase.from('reports').insert({ reporter_id: session.user.id, reported_type: 'user', reported_id: id });
-    if (error) {
-      console.error('[UserProfile] report failed:', error.message, error);
-      Alert.alert("Couldn't submit report", error.message);
-      return;
-    }
-    Alert.alert('Reported', "Thanks — we've received your report.");
+    const { error } = await supabase.from('reports').insert({ reporter_id: session.user.id, reported_user_id: id, reason, details: details || null });
+    if (error) throw error;
   };
 
   const [menuOpen, setMenuOpen] = useState(false);
   const openMenu = () => setMenuOpen(true);
   const profileMenuOptions: ActionSheetOption[] = [
     { label: isBlocked ? 'Unblock' : 'Block', icon: 'ban-outline', destructive: true, onPress: toggleBlock },
-    {
-      label: 'Report',
-      icon: 'flag-outline',
-      onPress: () =>
-        Alert.alert('Report user', 'Are you sure you want to report this account?', [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Report', style: 'destructive', onPress: reportUser },
-        ]),
-    },
+    { label: 'Report', icon: 'flag-outline', onPress: () => setReportOpen(true) },
   ];
 
   const startConversation = async () => {
@@ -189,6 +212,11 @@ export default function UserProfileScreen() {
       if (shared?.length) convId = shared[0].conversation_id;
     }
     if (!convId) {
+      const allowed = await canPerform(profile?.who_can_message, id as string, session.user.id);
+      if (!allowed) {
+        Alert.alert("Can't message", permissionDeniedMessage('who can message them', profile?.who_can_message));
+        return;
+      }
       const { data: conv } = await supabase.from('conversations').insert({}).select().single();
       await supabase.from('conversation_participants').insert([
         { conversation_id: conv.id, user_id: session.user.id },
@@ -201,29 +229,73 @@ export default function UserProfileScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.center, { backgroundColor: colors.bg }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
+      <View style={{ flex: 1, backgroundColor: colors.bg }}>
+        <ProfileHeaderSkeleton />
+        <View style={{ marginTop: 24 }}>
+          <FeedSkeleton count={3} />
+        </View>
       </View>
     );
   }
 
   const isMe = session?.user?.id === id;
   const videos = posts.filter((p) => p.video_url);
-  const listData = activeTab === 'posts' ? posts : activeTab === 'reposts' ? reposts : videos;
+  const isLocked = !!profile?.is_private && !isMe && !isFollowing;
+  const listData = isLocked ? [] : activeTab === 'posts' ? posts : activeTab === 'reposts' ? reposts : videos;
 
-  // One element, continuously scaling and sliding from its resting spot
-  // (centered, below the status bar) to a compact spot pinned next to the
-  // back button — not two elements cross-fading. Scaling the whole block
-  // shrinks the avatar and the name together, in step, the whole time.
-  const HEADER_RESERVE = 178; // space the avatar+name block occupies at rest
-  const scale = scrollY.interpolate({ inputRange: [0, 140], outputRange: [1, 0.32], extrapolate: 'clamp' });
-  const targetCenterX = 64 + 46; // roughly next to the back button once shrunk
-  const translateX = scrollY.interpolate({
-    inputRange: [0, 140],
-    outputRange: [0, targetCenterX - windowWidth / 2],
-    extrapolate: 'clamp',
-  });
-  const translateY = scrollY.interpolate({ inputRange: [0, 140], outputRange: [0, -98], extrapolate: 'clamp' });
+  const openFollowing = () => {
+    if (profile?.who_can_see_following === 'nobody' && !isMe) {
+      Alert.alert('Private', "This person has hidden who they follow.");
+      return;
+    }
+    router.push(`/user/${id}/following`);
+  };
+
+  // Previous approach: one avatar element continuously scaled+translated
+  // from its resting spot to a guessed pixel target next to the back
+  // button. That guess was wrong on a real device — RN scales around an
+  // element's own center, not its corner, so the "final" position doesn't
+  // land where simple corner math predicts, and the avatar ended up
+  // floating well above where it was supposed to sit, disconnected from
+  // the compact name next to it.
+  //
+  // New approach, per your idea: a single glass pill holding a small
+  // avatar + name together, so they're laid out by flexbox (always
+  // aligned with each other, by construction) rather than by two separate
+  // pieces of transform math trying to land in the same place. The pill
+  // only ever moves along a straight, translate-only path (no scale), and
+  // translate-only transforms in RN are exact — no center-vs-corner
+  // surprises — so "where it ends up" is no longer a guess.
+  // The big avatar+name+username block is a separate absolute overlay,
+  // not actually part of this spacer's layout — so this height only ever
+  // reserves *visual* room for it above the list's real content (the bio
+  // is the first real thing below it). At 178 the block's actual bottom
+  // edge (78 top + 96 avatar + 12 gap + ~25 name line + ~19 username
+  // line) landed about 3px past where the bio started — invisible in a
+  // layout inspector, but on a real device with any font-metric variance
+  // (different OS, larger system font size, etc.) that gap goes negative
+  // and the username visibly sits on top of the bio. This needs real
+  // breathing room, not a number tuned to the exact pixel.
+  const HEADER_RESERVE = 210;
+  // Big avatar + big name: fade out together, in place, before scroll 90 —
+  // no motion, so nothing to get wrong.
+  const bigOpacity = scrollY.interpolate({ inputRange: [0, 90], outputRange: [1, 0], extrapolate: 'clamp' });
+  // Glass pill: fades in over the back half of the scroll, sliding the
+  // last little bit up into its resting spot (translate-only, so this
+  // slide is pixel-accurate, unlike the old scale-based one).
+  const pillOpacity = scrollY.interpolate({ inputRange: [90, 140], outputRange: [0, 1], extrapolate: 'clamp' });
+  const pillTranslateY = scrollY.interpolate({ inputRange: [90, 140], outputRange: [10, 0], extrapolate: 'clamp' });
+  // The pill starts as a plain circle — same width as its own height, so
+  // borderRadius:19 makes it round rather than a stadium shape — and
+  // widens into the full pill as it fades in. DOT_SIZE (38) lines up with
+  // the pill's 10px left padding + 28px avatar, so what's actually inside
+  // that starting circle is the avatar itself, not empty space: it reads
+  // as "the avatar dot grows a name tag", not an unrelated blob appearing.
+  // pillWidth is measured from the real content on its first layout pass
+  // (see the BlurView's onLayout below); until that lands, 150 is just a
+  // reasonable placeholder so nothing breaks on the very first frame.
+  const DOT_SIZE = 38;
+  const pillWidthAnim = scrollY.interpolate({ inputRange: [90, 140], outputRange: [DOT_SIZE, pillWidth || 150], extrapolate: 'clamp' });
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -241,15 +313,19 @@ export default function UserProfileScreen() {
             {profile?.bio ? <Text style={[styles.bio, { color: colors.text }]}>{profile.bio}</Text> : null}
             <View style={styles.statsRow}>
               <Text style={[styles.stat, { color: colors.subtext }]}><Text style={[styles.statNum, { color: colors.text }]}>{profile?.followers_count || 0}</Text> Followers</Text>
-              <Text style={[styles.stat, { color: colors.subtext }]}><Text style={[styles.statNum, { color: colors.text }]}>{profile?.following_count || 0}</Text> Following</Text>
+              <TouchableOpacity onPress={openFollowing}>
+                <Text style={[styles.stat, { color: colors.subtext }]}><Text style={[styles.statNum, { color: colors.text }]}>{profile?.following_count || 0}</Text> Following</Text>
+              </TouchableOpacity>
             </View>
             {!isMe && (
               <View style={styles.buttonRow}>
                 <TouchableOpacity
-                  style={[styles.followButton, { backgroundColor: colors.primary }, isFollowing && { backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border }]}
+                  style={[styles.followButton, { backgroundColor: colors.primary }, (isFollowing || requested) && { backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border }]}
                   onPress={toggleFollow}
                 >
-                  <Text style={[styles.followText, isFollowing && { color: colors.text }]}>{isFollowing ? 'Following' : 'Follow'}</Text>
+                  <Text style={[styles.followText, (isFollowing || requested) && { color: colors.text }]}>
+                    {isFollowing ? 'Following' : requested ? 'Requested' : 'Follow'}
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.messageButton, { borderColor: colors.primary }]} onPress={startConversation}>
                   <Text style={[styles.messageText, { color: colors.primary }]}>Message</Text>
@@ -257,35 +333,96 @@ export default function UserProfileScreen() {
               </View>
             )}
 
-            <View style={[styles.tabRow, { borderColor: colors.border }]}>
-              {(['posts', 'reposts', 'videos'] as const).map((tab) => (
-                <TouchableOpacity key={tab} style={styles.tabBtn} onPress={() => setActiveTab(tab)}>
-                  <Text style={[styles.tabText, { color: activeTab === tab ? colors.text : colors.faint }, activeTab === tab && { fontWeight: '700' }]}>
-                    {tab === 'posts' ? 'Posts' : tab === 'reposts' ? 'Reposts' : 'Videos'}
-                  </Text>
-                  {activeTab === tab && <View style={[styles.tabUnderline, { backgroundColor: colors.primary }]} />}
-                </TouchableOpacity>
-              ))}
-            </View>
+            {!isLocked && (
+              <View style={[styles.tabRow, { borderColor: colors.border }]}>
+                {(['posts', 'reposts', 'videos'] as const).map((tab) => (
+                  <TouchableOpacity key={tab} style={styles.tabBtn} onPress={() => setActiveTab(tab)}>
+                    <Text style={[styles.tabText, { color: activeTab === tab ? colors.text : colors.faint }, activeTab === tab && { fontWeight: '700' }]}>
+                      {tab === 'posts' ? 'Posts' : tab === 'reposts' ? 'Reposts' : 'Videos'}
+                    </Text>
+                    {activeTab === tab && <View style={[styles.tabUnderline, { backgroundColor: colors.primary }]} />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {isLocked && (
+              <View style={styles.lockedCard}>
+                <Ionicons name="lock-closed" size={30} color={colors.faint} />
+                <Text style={[styles.lockedTitle, { color: colors.text }]}>This profile is private</Text>
+                <Text style={[styles.lockedBody, { color: colors.subtext }]}>
+                  {requested
+                    ? `Your follow request is waiting for @${profile?.username || 'this account'} to approve it.`
+                    : `Follow @${profile?.username || 'this account'} to see their posts, reposts, and videos.`}
+                </Text>
+              </View>
+            )}
           </View>
         }
         ListEmptyComponent={
-          <Text style={[styles.empty, { color: colors.subtext }]}>
-            {activeTab === 'posts' ? 'No posts yet.' : activeTab === 'reposts' ? 'No reposts yet.' : 'No videos yet.'}
-          </Text>
+          isLocked ? null : (
+            <Text style={[styles.empty, { color: colors.subtext }]}>
+              {activeTab === 'posts' ? 'No posts yet.' : activeTab === 'reposts' ? 'No reposts yet.' : 'No videos yet.'}
+            </Text>
+          )
         }
       />
 
-      {/* The one avatar+name block, floating above the list so it never
-          fights the list's own layout — it's the same element throughout
-          the scroll, just transformed. */}
-      <Animated.View style={[styles.floatingIdentity, { transform: [{ translateX }, { translateY }, { scale }] }]} pointerEvents="none">
+      {/* This screen only ever had two small floating circular buttons
+          with nothing behind the status bar itself — persistent, not tied
+          to scroll, same as the system status bar itself is always
+          there. */}
+      <StatusBarScrim />
+
+      {/* Big avatar + name: static at their resting spot, just fade out
+          together — no transform math to get wrong. */}
+      <Animated.View style={[styles.floatingBig, { opacity: bigOpacity }]} pointerEvents="none">
         <Avatar uri={profile?.avatar_url} size={96} />
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 }}>
           <Text style={[styles.name, { color: colors.text }]}>{profile?.display_name || 'No name set'}</Text>
           <VerifiedBadge verified={profile?.verified} isAuthentic={profile?.is_authentic} size={16} />
         </View>
         <Text style={[styles.username, { color: colors.subtext }]}>@{profile?.username || 'unknown'}</Text>
+      </Animated.View>
+
+      {/* Invisible measuring copy: identical content, laid out completely
+          normally (no animated parent, no BlurView) so its onLayout width
+          is trustworthy. The real pill below reads pillWidth from THIS,
+          not from measuring itself — a BlurView living inside a parent
+          whose width is being animated turned out to not reliably report
+          its true natural content width (it kept measuring back whatever
+          the shrunken clip currently was, so the growth animation always
+          stopped wherever it happened to be first measured instead of
+          reaching the real full width). This copy never has that problem
+          because nothing around it is animated or clipped. */}
+      <View style={styles.pillMeasure} pointerEvents="none" onLayout={(e) => setPillWidth(e.nativeEvent.layout.width)}>
+        <View style={styles.pill}>
+          <Avatar uri={profile?.avatar_url} size={28} />
+          <Text style={[styles.pillName, { color: colors.text }]} numberOfLines={1}>
+            {profile?.display_name || 'No name set'}
+          </Text>
+          <VerifiedBadge verified={profile?.verified} isAuthentic={profile?.is_authentic} size={13} />
+        </View>
+      </View>
+
+      {/* Glass pill: small avatar + name together in one row, so they're
+          always aligned with each other by flexbox — not by two separate
+          pieces of math trying to land in the same spot.
+          The outer pillClip is what actually animates (width only, plus
+          the wrap's own opacity/translateY) — the BlurView inside it stays
+          at its natural full size the whole time and simply gets clipped
+          by the shrunk clip window, which is what makes this read as
+          "growing out of a dot" rather than a separately-scaled shape. */}
+      <Animated.View style={[styles.pillWrap, { opacity: pillOpacity, transform: [{ translateY: pillTranslateY }] }]} pointerEvents="none">
+        <Animated.View style={[styles.pillClip, { width: pillWidthAnim }]}>
+          <BlurView intensity={50} tint={isDark ? 'dark' : 'light'} style={[styles.pill, { backgroundColor: colors.card + '99' }]}>
+            <Avatar uri={profile?.avatar_url} size={28} />
+            <Text style={[styles.pillName, { color: colors.text }]} numberOfLines={1}>
+              {profile?.display_name || 'No name set'}
+            </Text>
+            <VerifiedBadge verified={profile?.verified} isAuthentic={profile?.is_authentic} size={13} />
+          </BlurView>
+        </Animated.View>
       </Animated.View>
 
       <View style={styles.topOverlay} pointerEvents="box-none">
@@ -300,6 +437,7 @@ export default function UserProfileScreen() {
       </View>
 
       <ActionSheet visible={menuOpen} title={profile?.display_name} options={profileMenuOptions} onClose={() => setMenuOpen(false)} />
+      <ReportModal visible={reportOpen} onClose={() => setReportOpen(false)} onSubmit={submitUserReport} />
     </View>
   );
 }
@@ -323,6 +461,9 @@ const styles = StyleSheet.create({
   tabText: { fontSize: 14 },
   tabUnderline: { height: 2.5, width: 40, borderRadius: 2, marginTop: 8 },
   empty: { textAlign: 'center', marginTop: 30 },
+  lockedCard: { alignItems: 'center', paddingHorizontal: 40, paddingVertical: 40 },
+  lockedTitle: { fontSize: 16, fontWeight: '700', marginTop: 12 },
+  lockedBody: { fontSize: 13, textAlign: 'center', marginTop: 8, lineHeight: 19 },
   topOverlay: {
     position: 'absolute',
     top: 50,
@@ -333,11 +474,51 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   topOverlayBtn: { width: 38, height: 38, borderRadius: 19, justifyContent: 'center', alignItems: 'center' },
-  floatingIdentity: {
+  floatingBig: {
     position: 'absolute',
     top: 78,
     left: 0,
     right: 0,
     alignItems: 'center',
   },
+  pillWrap: {
+    // Same top strip the back button sits in, just to its right — a fixed
+    // spot, not a computed one, so there's nothing here that can be "off".
+    position: 'absolute',
+    top: 50,
+    left: 64,
+  },
+  // Rendered off-screen (opacity 0, way outside any visible bounds) purely
+  // so its onLayout gives an honest, unclipped measurement of the pill's
+  // real content width. Never actually seen.
+  pillMeasure: {
+    position: 'absolute',
+    top: -1000,
+    left: 0,
+    opacity: 0,
+  },
+  pillClip: {
+    height: 38,
+    borderRadius: 19,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    // Without this, the default flex behavior stretches the BlurView
+    // child to exactly match this box's own (animated, starting-tiny)
+    // width — which meant its onLayout measurement always reported back
+    // whatever the current animated width already was, not its true
+    // content width. That collapsed the width interpolation's output
+    // range down to a single repeated value, so it never visibly grew at
+    // all. flex-start lets the child size itself from its real content
+    // instead, and this box's own overflow:hidden is what clips it.
+    alignItems: 'flex-start',
+  },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    height: 38,
+    paddingHorizontal: 10,
+  },
+  pillName: { fontSize: 15, fontWeight: '800', maxWidth: 150 },
 });

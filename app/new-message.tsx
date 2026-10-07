@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { router } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
 import { spacing } from '@/lib/theme';
 import Avatar from '@/components/Avatar';
+import { canPerform, permissionDeniedMessage } from '@/lib/permissions';
 
 export default function NewMessageScreen() {
   const { session } = useAuth();
@@ -47,6 +48,14 @@ export default function NewMessageScreen() {
       if (shared?.length) convId = shared[0].conversation_id;
     }
     if (!convId) {
+      // Only a brand-new conversation is gated — once one already exists,
+      // both sides can keep talking regardless of this setting.
+      const allowed = await canPerform(user.who_can_message, user.id, session.user.id);
+      if (!allowed) {
+        setStarting(false);
+        Alert.alert("Can't message", permissionDeniedMessage('who can message them', user.who_can_message));
+        return;
+      }
       const { data: conv } = await supabase.from('conversations').insert({}).select().single();
       await supabase.from('conversation_participants').insert([
         { conversation_id: conv.id, user_id: session.user.id },

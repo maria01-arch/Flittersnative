@@ -1,11 +1,13 @@
 import { useRef, useState } from 'react';
-import { View, Text, StyleSheet, Animated, PanResponder, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, Animated, PanResponder, TouchableOpacity, Image, Modal, Pressable } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/lib/ThemeContext';
 import MessageActionSheet from './MessageActionSheet';
 import { formatMessageTime } from '@/lib/formatTime';
 import LinkifiedText from './LinkifiedText';
 import VoiceMessagePlayer from './VoiceMessagePlayer';
+import StickerMedia from './StickerMedia';
+import MessageVideoPlayer from './MessageVideoPlayer';
 
 export default function MessageBubble({
   message,
@@ -25,6 +27,7 @@ export default function MessageBubble({
   onReact,
   onPin,
   onRetry,
+  onReport,
 }: {
   message: any;
   isMine: boolean;
@@ -43,9 +46,11 @@ export default function MessageBubble({
   onReact: (m: any, emoji: string) => void;
   onPin: (m: any) => void;
   onRetry?: (m: any) => void;
+  onReport?: (m: any) => void;
 }) {
   const { colors } = useTheme();
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [fullscreenImage, setFullscreenImage] = useState(false);
   const translateX = useRef(new Animated.Value(0)).current;
 
   const panResponder = useRef(
@@ -68,7 +73,9 @@ export default function MessageBubble({
   });
   const myReaction = reactions.find((r) => r.user_id === currentUserId)?.emoji;
   const isVoice = !!(message.is_voice && message.voice_url);
-  const isImage = !!(message.image_url && !isVoice);
+  const isSticker = !!(message.is_sticker && message.sticker_url);
+  const isVideo = !!(message.video_url && !isVoice && !isSticker);
+  const isImage = !!(message.image_url && !isVoice && !isSticker && !isVideo);
   const isPending = !!message._pending;
   const isFailed = !!message._failed;
 
@@ -86,7 +93,14 @@ export default function MessageBubble({
               <Text style={[styles.pinLabel, { color: colors.faint }]}>Pinned</Text>
             </View>
           )}
-          <View style={[styles.bubble, isMine ? { backgroundColor: colors.primary } : { backgroundColor: colors.bubbleTheirs }, isVoice && styles.voiceBubble, isImage && styles.imageBubble]}>
+          <View
+            style={[
+              !isSticker && styles.bubble,
+              !isSticker && (isMine ? { backgroundColor: colors.primary } : { backgroundColor: colors.bubbleTheirs }),
+              isVoice && styles.voiceBubble,
+              (isImage || isVideo) && styles.imageBubble,
+            ]}
+          >
             {message.reply_to ? (
               <View style={[styles.replyQuote, { borderLeftColor: isMine ? 'rgba(255,255,255,0.6)' : colors.primary }]}>
                 <Text style={[styles.replyQuoteText, { color: isMine ? 'rgba(255,255,255,0.85)' : colors.subtext }]} numberOfLines={1}>
@@ -94,10 +108,20 @@ export default function MessageBubble({
                 </Text>
               </View>
             ) : null}
-            {isVoice ? (
+            {isSticker ? (
+              <StickerMedia url={message.sticker_url} size={132} />
+            ) : isVoice ? (
               <VoiceMessagePlayer url={message.voice_url} duration={message.voice_duration} isMine={isMine} />
+            ) : isVideo ? (
+              <MessageVideoPlayer url={message.video_url} />
             ) : isImage ? (
-              <Image source={{ uri: message.image_url }} style={styles.messageImage} resizeMode="cover" />
+              // A tap opens the image fullscreen — this used to sit inside a
+              // TouchableOpacity that only had onLongPress wired up, so taps
+              // did nothing at all. The long-press message menu still works
+              // the same way, just moved onto this element directly.
+              <Pressable onPress={() => setFullscreenImage(true)} onLongPress={() => setSheetOpen(true)} delayLongPress={220}>
+                <Image source={{ uri: message.image_url }} style={styles.messageImage} resizeMode="cover" />
+              </Pressable>
             ) : (
               <LinkifiedText
                 text={message.content}
@@ -174,7 +198,23 @@ export default function MessageBubble({
           setSheetOpen(false);
           onPin(message);
         }}
+        onReport={
+          onReport
+            ? () => {
+                setSheetOpen(false);
+                onReport(message);
+              }
+            : undefined
+        }
       />
+
+      {isImage && (
+        <Modal visible={fullscreenImage} transparent animationType="fade" onRequestClose={() => setFullscreenImage(false)}>
+          <Pressable style={styles.fullscreenBackdrop} onPress={() => setFullscreenImage(false)}>
+            <Image source={{ uri: message.image_url }} style={styles.fullscreenImage} resizeMode="contain" />
+          </Pressable>
+        </Modal>
+      )}
     </View>
   );
 }
@@ -205,4 +245,6 @@ const styles = StyleSheet.create({
   reactionPill: { flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 12, borderWidth: 1, paddingHorizontal: 6, paddingVertical: 2 },
   reactionEmoji: { fontSize: 13 },
   reactionCount: { fontSize: 11, fontWeight: '600' },
+  fullscreenBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center' },
+  fullscreenImage: { width: '100%', height: '100%' },
 });

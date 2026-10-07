@@ -4,6 +4,7 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { usePreferences } from '@/lib/PreferencesContext';
+import { useVideoStatus } from '@/lib/useVideoStatus';
 import { useAuth } from '@/lib/AuthContext';
 import { supabase } from '@/lib/supabase';
 import ReelCommentsSheet from './ReelCommentsSheet';
@@ -15,6 +16,7 @@ const { height: SCREEN_H } = Dimensions.get('window');
 export default function ReelItem({
   reel,
   active,
+  shouldLoad,
   isMine,
   height,
   onLike,
@@ -23,6 +25,18 @@ export default function ReelItem({
 }: {
   reel: any;
   active: boolean;
+  // Distinct from `active` on purpose: `active` means "this is the one
+  // playing right now", but by the time a reel becomes active, its video
+  // hasn't even started downloading yet if that's also the moment it
+  // starts loading — a swipe would show a blank screen for however long
+  // that takes. `shouldLoad` covers a small neighborhood around the
+  // active index (see reels.tsx) so the next swipe or two already has
+  // something buffered, without going anywhere near "load everything the
+  // list happens to have rendered", which is what was actually driving
+  // data usage: every rendered reel — not just the visible one — was
+  // downloading its full video regardless of whether anyone would ever
+  // swipe to it.
+  shouldLoad: boolean;
   isMine?: boolean;
   height?: number;
   onLike: (reel: any) => void;
@@ -35,7 +49,7 @@ export default function ReelItem({
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [quickComment, setQuickComment] = useState('');
   const [sendingQuick, setSendingQuick] = useState(false);
-  const player = useVideoPlayer(reel.video_url, (p) => {
+  const player = useVideoPlayer(shouldLoad ? reel.video_url : null, (p) => {
     p.loop = true;
   });
 
@@ -78,12 +92,19 @@ export default function ReelItem({
     onCommentPosted?.(reel);
   };
 
+  // Not loaded yet (outside the shouldLoad neighborhood) or loaded but no
+  // frame decoded yet both read the same way to whoever's looking: reuse
+  // the same play-icon overlay already used for "paused" rather than
+  // adding a second, different-looking empty state.
+  const videoStatus = useVideoStatus(player);
+  const notReady = !shouldLoad || videoStatus !== 'readyToPlay';
+
   return (
     <View style={[styles.container, height ? { height } : null]}>
       <Pressable style={StyleSheet.absoluteFill} onPress={togglePlay}>
         <VideoView player={player} style={styles.video} contentFit="cover" nativeControls={false} />
-        {(userPaused || !autoplayVideos) && (
-          // paused indicator also shows when autoplay is off, so the user knows to tap
+        {(userPaused || !autoplayVideos || notReady) && (
+          // Paused, autoplay off, or just not loaded/ready yet — same overlay either way.
           <View style={styles.pausedOverlay}>
             <Ionicons name="play" size={56} color="rgba(255,255,255,0.9)" />
           </View>

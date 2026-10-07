@@ -1,4 +1,6 @@
-import { Text, Linking, TextStyle, StyleProp } from 'react-native';
+import { Text, TextStyle, StyleProp } from 'react-native';
+import { usePreferences } from '@/lib/PreferencesContext';
+import { openLink } from '@/lib/openLink';
 
 const URL_REGEX = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
 
@@ -11,6 +13,7 @@ export default function LinkifiedText({
   style?: StyleProp<TextStyle>;
   linkColor: string;
 }) {
+  const { browserEngine } = usePreferences();
   const parts = (text || '').split(URL_REGEX);
 
   return (
@@ -20,11 +23,7 @@ export default function LinkifiedText({
           URL_REGEX.lastIndex = 0;
           const url = part.startsWith('http') ? part : `https://${part}`;
           return (
-            <Text
-              key={i}
-              style={{ color: linkColor, textDecorationLine: 'underline' }}
-              onPress={() => Linking.openURL(url).catch(() => {})}
-            >
+            <Text key={i} style={{ color: linkColor, textDecorationLine: 'underline' }} onPress={() => openLink(url, browserEngine)}>
               {part}
             </Text>
           );

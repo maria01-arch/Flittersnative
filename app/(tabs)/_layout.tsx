@@ -18,6 +18,15 @@ export default function TabLayout() {
           // moment between tapping a tab and its screen's own background
           // painting in.
           sceneStyle: { backgroundColor: colors.bg },
+          // Explicit, not assumed: a tab screen's own data-fetching
+          // effects run the moment it mounts, so if every tab mounted
+          // eagerly at launch, Messages would fetch every conversation
+          // preview, Notifications would fetch the whole notification
+          // list, Reels would start loading video, etc. — all before the
+          // person ever left the Home tab. lazy:true means a tab's
+          // screen, and everything its own useEffect does, doesn't exist
+          // at all until that tab is actually opened once.
+          lazy: true,
         }}>
         <Tabs.Screen name="index" />
         <Tabs.Screen name="search" />

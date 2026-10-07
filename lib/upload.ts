@@ -120,3 +120,16 @@ export async function uploadVideo(uri: string, folder: string): Promise<string |
   const path = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
   return uploadFile(uri, path, VIDEO_MIME_BY_EXT[ext] || 'video/mp4');
 }
+
+// Stickers reuse the same 'avatars' R2 bucket under a stickers/ prefix —
+// matches the webapp, which stores its own user-uploaded stickers the same
+// way (see SphereApp.js StickerTray). userId is folded into the path so
+// two people's stickers never collide.
+const STICKER_MIME_BY_EXT: Record<string, string> = { ...MIME_BY_EXT, ...VIDEO_MIME_BY_EXT };
+
+export async function uploadSticker(uri: string, userId: string): Promise<string | null> {
+  const filename = uri.split('/').pop() || `${Date.now()}.jpg`;
+  const ext = (filename.split('.').pop() || 'jpg').toLowerCase();
+  const path = `stickers/${userId}_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+  return uploadFile(uri, path, STICKER_MIME_BY_EXT[ext] || 'image/jpeg');
+}

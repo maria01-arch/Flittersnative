@@ -4,10 +4,16 @@ import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
+import { useTheme } from '@/lib/ThemeContext';
 import { uploadImage } from '@/lib/upload';
 
+// This screen predated the theme system — every color was hardcoded
+// (white background, black text, gray borders), so it looked broken
+// against dark mode. It now reads from useTheme() like every other
+// screen does.
 export default function EditProfileScreen() {
   const { session } = useAuth();
+  const { colors } = useTheme();
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   const [location, setLocation] = useState('');
@@ -56,62 +62,81 @@ export default function EditProfileScreen() {
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#1DA1F2" />
+      <View style={[styles.center, { backgroundColor: colors.bg }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.topBar}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.bg }]}>
+      <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
         <TouchableOpacity onPress={() => router.back()}>
-          <Text style={styles.cancel}>Cancel</Text>
+          <Text style={[styles.cancel, { color: colors.subtext }]}>Cancel</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Edit Profile</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Edit Profile</Text>
         <TouchableOpacity onPress={save} disabled={saving}>
-          {saving ? <ActivityIndicator size="small" color="#1DA1F2" /> : <Text style={styles.save}>Save</Text>}
+          {saving ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={[styles.save, { color: colors.primary }]}>Save</Text>}
         </TouchableOpacity>
       </View>
 
       <TouchableOpacity style={styles.avatarWrap} onPress={pickAvatar}>
         <Image
           source={{ uri: newAvatarUri || avatarUrl || 'https://placehold.co/120x120/1DA1F2/fff?text=' + (displayName?.[0] || '?') }}
-          style={styles.avatar}
+          style={[styles.avatar, { backgroundColor: colors.inputBg }]}
         />
-        <Text style={styles.changePhoto}>Change photo</Text>
+        <Text style={[styles.changePhoto, { color: colors.primary }]}>Change photo</Text>
       </TouchableOpacity>
 
       <View style={styles.field}>
-        <Text style={styles.label}>Display Name</Text>
-        <TextInput style={styles.input} value={displayName} onChangeText={setDisplayName} placeholder="Your name" placeholderTextColor="#888" />
+        <Text style={[styles.label, { color: colors.subtext }]}>Display Name</Text>
+        <TextInput
+          style={[styles.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
+          value={displayName}
+          onChangeText={setDisplayName}
+          placeholder="Your name"
+          placeholderTextColor={colors.faint}
+        />
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>Bio</Text>
-        <TextInput style={[styles.input, styles.multiline]} value={bio} onChangeText={setBio} placeholder="Tell people about yourself" placeholderTextColor="#888" multiline />
+        <Text style={[styles.label, { color: colors.subtext }]}>Bio</Text>
+        <TextInput
+          style={[styles.input, styles.multiline, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
+          value={bio}
+          onChangeText={setBio}
+          placeholder="Tell people about yourself"
+          placeholderTextColor={colors.faint}
+          multiline
+        />
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>Location</Text>
-        <TextInput style={styles.input} value={location} onChangeText={setLocation} placeholder="e.g. Lagos, Nigeria" placeholderTextColor="#888" />
+        <Text style={[styles.label, { color: colors.subtext }]}>Location</Text>
+        <TextInput
+          style={[styles.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
+          value={location}
+          onChangeText={setLocation}
+          placeholder="e.g. Lagos, Nigeria"
+          placeholderTextColor={colors.faint}
+        />
       </View>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+  container: { flex: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 50, paddingHorizontal: 16, paddingBottom: 16 },
-  cancel: { color: '#888', fontSize: 16 },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 50, paddingHorizontal: 16, paddingBottom: 16, borderBottomWidth: 1 },
+  cancel: { fontSize: 16 },
   title: { fontSize: 16, fontWeight: 'bold' },
-  save: { color: '#1DA1F2', fontSize: 16, fontWeight: 'bold' },
-  avatarWrap: { alignItems: 'center', marginBottom: 20 },
-  avatar: { width: 100, height: 100, borderRadius: 50, backgroundColor: '#ddd' },
-  changePhoto: { color: '#1DA1F2', marginTop: 10, fontWeight: '600' },
+  save: { fontSize: 16, fontWeight: 'bold' },
+  avatarWrap: { alignItems: 'center', marginBottom: 20, marginTop: 8 },
+  avatar: { width: 100, height: 100, borderRadius: 50 },
+  changePhoto: { marginTop: 10, fontWeight: '600' },
   field: { paddingHorizontal: 16, marginBottom: 16 },
-  label: { fontSize: 13, color: '#888', marginBottom: 6, fontWeight: '600' },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 10, padding: 12, fontSize: 15 },
+  label: { fontSize: 13, marginBottom: 6, fontWeight: '600' },
+  input: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 15 },
   multiline: { minHeight: 80, textAlignVertical: 'top' },
 });
