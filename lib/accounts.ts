@@ -116,14 +116,18 @@ export async function persistCurrentSession() {
   });
 }
 
-export async function switchToAccount(userId: string): Promise<{ error?: string }> {
+// skipPersist: normally the account being switched AWAY from gets its latest
+// tokens saved first. When that account was just removed or deleted (sign
+// out, delete account), saving it again would quietly put it straight back
+// into the switcher — so those callers pass skipPersist: true.
+export async function switchToAccount(userId: string, opts?: { skipPersist?: boolean }): Promise<{ error?: string }> {
   const accounts = await getStoredAccounts();
   const target = accounts.find((a) => a.userId === userId);
   if (!target) return { error: 'That account is no longer saved on this device.' };
 
   switching = true;
   try {
-    await persistCurrentSession();
+    if (!opts?.skipPersist) await persistCurrentSession();
     const { error } = await supabase.auth.setSession({ access_token: target.accessToken, refresh_token: target.refreshToken });
     if (error) {
       // The stored refresh token doesn't work anymore — expired, or

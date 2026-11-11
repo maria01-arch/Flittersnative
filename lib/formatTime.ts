@@ -1,22 +1,15 @@
+// Real clock time for chat messages (never "5m" / "2h").
+// Today: "3:20 PM". Yesterday: "Yesterday 3:20 PM". Older: "Oct 12, 3:20 PM".
 export function formatMessageTime(iso: string): string {
   const date = new Date(iso);
+  if (isNaN(date.getTime())) return '';
   const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMin = diffMs / 60000;
-
-  if (diffMin < 1) return 'now';
-  if (diffMin < 60) return `${Math.floor(diffMin)}m`;
-
-  const isToday = date.toDateString() === now.toDateString();
-  if (isToday) {
-    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  }
-
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  if (date.toDateString() === yesterday.toDateString()) {
-    return 'Yesterday';
-  }
-
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOfDay(now) - startOfDay(date)) / 86400000);
+  if (days <= 0) return time;
+  if (days === 1) return `Yesterday ${time}`;
+  const sameYear = date.getFullYear() === now.getFullYear();
+  const day = date.toLocaleDateString([], sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
+  return `${day}, ${time}`;
 }

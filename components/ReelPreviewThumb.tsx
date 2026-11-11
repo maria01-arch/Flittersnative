@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { TouchableOpacity, View, Text, StyleSheet, Image, ActivityIndicator } from 'react-native';
+import { TouchableOpacity, View, StyleSheet, Image, ActivityIndicator } from 'react-native';
+import Text from '@/components/AppText';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
+import { requestOpenReel } from '@/lib/reelOpen';
 
 // No video player here at all anymore — just a real still frame pulled
 // from the video once, cached for this component's lifetime. That's what
@@ -29,7 +31,10 @@ export default function ReelPreviewThumb({ reel }: { reel: any }) {
   }, [reel.video_url]);
 
   return (
-    <TouchableOpacity style={styles.reelThumb} onPress={() => router.push('/(tabs)/reels')}>
+    <TouchableOpacity style={styles.reelThumb} onPress={() => {
+      requestOpenReel(String(reel.id));
+      router.push('/(tabs)/reels');
+    }}>
       {thumbUri ? (
         <Image source={{ uri: thumbUri }} style={styles.video} resizeMode="cover" />
       ) : (

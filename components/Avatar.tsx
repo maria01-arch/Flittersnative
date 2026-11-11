@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { View, Image, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/lib/ThemeContext';
+import OptImage from './OptImage';
+import { isDeadMedia } from '@/lib/imageUrl';
 
 // Used everywhere a user/group avatar is shown. Previously, a missing
 // avatar_url fell back to an external placehold.co URL — which meant a
@@ -22,7 +24,7 @@ export default function Avatar({
   const bg = color || colors.border;
   const [failed, setFailed] = useState(false);
 
-  if (!uri || failed) {
+  if (!uri || failed || isDeadMedia(uri)) {
     return (
       <View style={[styles.fallback, { width: size, height: size, borderRadius: size / 2, backgroundColor: bg }]}>
         <Ionicons name="person" size={size * 0.58} color={colors.subtext} />
@@ -31,7 +33,8 @@ export default function Avatar({
   }
 
   return (
-    <Image
+    <OptImage
+      dp={size}
       source={{ uri }}
       style={[styles.image, { width: size, height: size, borderRadius: size / 2, backgroundColor: bg }]}
       onError={() => setFailed(true)}

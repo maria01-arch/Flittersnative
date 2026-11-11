@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import Text from '@/components/AppText';
 import { router, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
@@ -73,7 +74,7 @@ export default function FollowingListScreen() {
               <View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
                   <Text style={[styles.displayName, { color: colors.text }]}>{item.display_name}</Text>
-                  <VerifiedBadge verified={item.verified} isAuthentic={item.is_authentic} size={12} />
+                  <VerifiedBadge verified={item.verified} isAuthentic={item.is_authentic} plan={item.verified_plan} size={12} />
                 </View>
                 <Text style={[styles.username, { color: colors.subtext }]}>@{item.username}</Text>
               </View>

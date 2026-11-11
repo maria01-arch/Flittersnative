@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, FlatList } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, FlatList } from 'react-native';
+import Text from '@/components/AppText';
 import { router, useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
@@ -66,7 +67,7 @@ export default function SwitchAccountScreen() {
           // nothing left to be signed into at all.
           const remaining = await getStoredAccounts();
           if (remaining.length > 0) {
-            const { error } = await switchToAccount(remaining[0].userId);
+            const { error } = await switchToAccount(remaining[0].userId, { skipPersist: true });
             if (!error) {
               router.dismissAll();
               router.replace('/(tabs)');

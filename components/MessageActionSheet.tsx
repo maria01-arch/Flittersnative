@@ -1,8 +1,15 @@
-import { Modal, View, Text, TouchableOpacity, StyleSheet, Pressable } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Modal, View, TouchableOpacity, StyleSheet, Pressable, FlatList } from 'react-native';
+import Text from '@/components/AppText';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { EMOJI_CATEGORIES } from '@/lib/emojiData';
+import Emoji from '@/components/Emoji';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/lib/ThemeContext';
 
-const QUICK_EMOJIS = ['❤️', '😂', '😮', '😢', '🙏', '👍'];
+const DEFAULT_QUICK = ['❤️', '😂', '😮', '😢', '🙏', '👍'];
+const RECENT_KEY = 'recent_reactions';
+const ALL_EMOJIS: string[] = EMOJI_CATEGORIES.flatMap((c: any) => c.emojis.map((e: any) => (typeof e === 'string' ? e : e.emoji || e.char || String(e))));
 
 export default function MessageActionSheet({
   visible,
@@ -30,17 +37,35 @@ export default function MessageActionSheet({
   isPinned: boolean;
 }) {
   const { colors } = useTheme();
+  // The quick row shows the emojis you reacted with most recently (newest
+  // first), filled up with the defaults. The "+" opens every emoji.
+  const [recent, setRecent] = useState<string[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  useEffect(() => {
+    if (visible) AsyncStorage.getItem(RECENT_KEY).then((raw) => setRecent(raw ? JSON.parse(raw) : [])).catch(() => {});
+  }, [visible]);
+  const quick = [...recent, ...DEFAULT_QUICK.filter((d) => !recent.includes(d))].slice(0, 6);
+  const react = (emoji: string) => {
+    const next = [emoji, ...recent.filter((x) => x !== emoji)].slice(0, 6);
+    setRecent(next);
+    AsyncStorage.setItem(RECENT_KEY, JSON.stringify(next)).catch(() => {});
+    setPickerOpen(false);
+    onReact(emoji);
+  };
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
         <Pressable style={[styles.sheet, { backgroundColor: colors.card }]} onPress={() => {}}>
           <View style={styles.emojiRow}>
-            {QUICK_EMOJIS.map((e) => (
-              <TouchableOpacity key={e} onPress={() => onReact(e)} style={styles.emojiBtn}>
-                <Text style={styles.emojiText}>{e}</Text>
+            {quick.map((e) => (
+              <TouchableOpacity key={e} onPress={() => react(e)} style={styles.emojiBtn}>
+                <Emoji emoji={e} size={34} />
               </TouchableOpacity>
             ))}
+            <TouchableOpacity onPress={() => setPickerOpen(true)} style={[styles.emojiBtn, { backgroundColor: colors.inputBg, borderRadius: 18, alignItems: 'center', justifyContent: 'center' }]}>
+              <Ionicons name="add" size={22} color={colors.text} />
+            </TouchableOpacity>
           </View>
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
           <TouchableOpacity style={styles.row} onPress={onReply}>
@@ -75,6 +100,25 @@ export default function MessageActionSheet({
           )}
         </Pressable>
       </Pressable>
+      <Modal visible={pickerOpen} transparent animationType="slide" onRequestClose={() => setPickerOpen(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setPickerOpen(false)}>
+          <Pressable style={[styles.sheet, { backgroundColor: colors.card, height: '55%' }]} onPress={() => {}}>
+            <Text style={{ color: colors.text, fontWeight: '800', fontSize: 16, textAlign: 'center', marginBottom: 8 }}>Pick a reaction</Text>
+            <FlatList
+              data={ALL_EMOJIS}
+              keyExtractor={(e, i) => e + i}
+              numColumns={8}
+              initialNumToRender={64}
+              windowSize={7}
+              renderItem={({ item }) => (
+                <TouchableOpacity onPress={() => react(item)} style={{ width: '12.5%', alignItems: 'center', paddingVertical: 6 }}>
+                  <Text style={{ fontSize: 26 }}>{item}</Text>
+                </TouchableOpacity>
+              )}
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
     </Modal>
   );
 }

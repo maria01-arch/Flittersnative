@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import VideoPlaceholder from './VideoPlaceholder';
+import { useVideoThumb } from '@/lib/videoThumb';
 
 // Used to load and start buffering the moment a message bubble rendered
 // at all — meaning every video message sitting in the chat's scroll
@@ -13,6 +14,7 @@ import VideoPlaceholder from './VideoPlaceholder';
 // placeholder, nothing downloaded until it's actually tapped.
 export default function MessageVideoPlayer({ url }: { url: string }) {
   const [tapped, setTapped] = useState(false);
+  const thumb = useVideoThumb(url);
   const player = useVideoPlayer(tapped ? url : null, (p) => {
     p.loop = false;
   });
@@ -20,7 +22,7 @@ export default function MessageVideoPlayer({ url }: { url: string }) {
   if (!tapped) {
     return (
       <Pressable style={styles.video} onPress={() => setTapped(true)}>
-        <VideoPlaceholder background="#00000030" />
+        <VideoPlaceholder posterUri={thumb?.uri} loading fit="cover" />
       </Pressable>
     );
   }

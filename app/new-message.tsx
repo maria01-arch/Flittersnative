@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { useRef, useState } from 'react';
+import { View, TextInput, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import Text from '@/components/AppText';
 import { router } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
@@ -8,6 +9,7 @@ import { useTheme } from '@/lib/ThemeContext';
 import { spacing } from '@/lib/theme';
 import Avatar from '@/components/Avatar';
 import { canPerform, permissionDeniedMessage } from '@/lib/permissions';
+import { cleanSearchText } from '@/lib/searchText';
 
 export default function NewMessageScreen() {
   const { session } = useAuth();
@@ -17,19 +19,24 @@ export default function NewMessageScreen() {
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
 
+  const searchSeq = useRef(0);
   const runSearch = async (text: string) => {
     setQuery(text);
-    if (text.trim().length < 2) {
+    const clean = cleanSearchText(text);
+    const seq = ++searchSeq.current;
+    if (clean.length < 2) {
       setResults([]);
+      setLoading(false);
       return;
     }
     setLoading(true);
     const { data } = await supabase
       .from('profiles')
       .select('*')
-      .or(`display_name.ilike.%${text}%,username.ilike.%${text}%`)
+      .or(`display_name.ilike.%${clean}%,username.ilike.%${clean}%`)
       .neq('id', session?.user?.id)
       .limit(20);
+    if (seq !== searchSeq.current) return;
     setResults(data || []);
     setLoading(false);
   };

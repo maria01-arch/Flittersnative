@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet, Animated, Platform } from 'react-native';
+import { View, Image, TouchableOpacity, StyleSheet, Animated, Platform } from 'react-native';
+import Text from '@/components/AppText';
 import { BlurView } from 'expo-blur';
 import { router } from 'expo-router';
 import { useAuth } from '@/lib/AuthContext';
@@ -44,7 +45,7 @@ export default function AppTopBar({ title }: { title: string }) {
       <BlurView intensity={85} tint={isDark ? 'dark' : 'light'} style={[StyleSheet.absoluteFill, { backgroundColor: colors.bg + 'E6' }]} />
       <View style={styles.topBar}>
         <TouchableOpacity onPress={() => router.push('/settings')}>
-          <Image source={{ uri: avatarUrl || 'https://placehold.co/80x80/6C5CE7/fff?text=?' }} style={[styles.avatar, { borderColor: colors.primary }]} />
+          <Image source={{ uri: avatarUrl || 'https://placehold.co/80x80/1D8FEA/fff?text=?' }} style={[styles.avatar, { borderColor: colors.primary }]} />
         </TouchableOpacity>
         <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
         <View style={{ width: 32 }} />

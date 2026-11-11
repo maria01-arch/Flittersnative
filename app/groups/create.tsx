@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Switch } from 'react-native';
+import { View, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Switch } from 'react-native';
+import Text from '@/components/AppText';
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
@@ -56,7 +57,7 @@ export default function CreateGroupScreen() {
 
       <View style={styles.field}>
         <Text style={[styles.label, { color: colors.subtext }]}>Description</Text>
-        <TextInput style={[styles.input, styles.multiline, { borderColor: colors.border, color: colors.text }]} value={description} onChangeText={setDescription} placeholder="What's this group about?" placeholderTextColor={colors.faint} multiline />
+        <TextInput style={[styles.input, styles.multiline, { borderColor: colors.border, color: colors.text }]} value={description} onChangeText={setDescription} placeholder="What's this group about?" placeholderTextColor={colors.faint} multiline submitBehavior="newline" returnKeyType="default" />
       </View>
 
       <View style={styles.switchRow}>

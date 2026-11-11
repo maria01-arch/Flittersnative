@@ -1,8 +1,9 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { Platform } from 'react-native';
-import { Session } from '@supabase/supabase-js';
+import { Session, isAuthRetryableFetchError } from '@supabase/supabase-js';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
-import { getForegroundLocation } from './location';
+import { getApproxPlace, getDeviceName, placeLabel } from './approxLocation';
 import { isAccountSwitchInProgress, upsertStoredAccount } from './accounts';
 
 // A simple, honest log of sign-ins — not a remote-session manager. We
@@ -15,13 +16,13 @@ import { isAccountSwitchInProgress, upsertStoredAccount } from './accounts';
 // on it means changing their password (which does invalidate other
 // sessions), not a per-row "sign this device out" button.
 //
-// Location is best-effort and foreground-only: getForegroundLocation()
-// itself asks for permission if it isn't already granted, and simply
-// returns null if the person declines — the login still gets recorded,
-// just without a location attached.
+// The place is only APPROXIMATE (city/country from the internet connection)
+// and never asks for location permission. The device name comes from the
+// phone itself. If either is unavailable the login is still recorded.
 async function recordLogin(userId: string) {
   try {
-    const location = await getForegroundLocation();
+    const location = await getApproxPlace();
+    const deviceName = getDeviceName();
 
     // Was this account ever seen before from roughly this platform+city?
     // If there's no history at all, this is the very first login right
@@ -36,14 +37,21 @@ async function recordLogin(userId: string) {
     const isFirstEver = !priorRows || priorRows.length === 0;
     const seenBefore = (priorRows || []).some((r: any) => r.platform === Platform.OS && (!location?.city || r.city === location.city));
 
-    await supabase.from('login_history').insert({
+    const row: any = {
       user_id: userId,
       platform: Platform.OS,
-      latitude: location?.latitude ?? null,
-      longitude: location?.longitude ?? null,
       city: location?.city ?? null,
       region: location?.region ?? null,
-    });
+      country: location?.country ?? null,
+      device_name: deviceName,
+    };
+    let { error: insErr } = await supabase.from('login_history').insert(row);
+    // The new columns may not exist yet (SQL not run): save the old shape.
+    if (insErr) {
+      delete row.country;
+      delete row.device_name;
+      await supabase.from('login_history').insert(row);
+    }
 
     if (!isFirstEver && !seenBefore) {
       // A row in `notifications` with type 'login_alert' is picked up by
@@ -51,7 +59,7 @@ async function recordLogin(userId: string) {
       // follow is — see supabase/functions/send-push/index.ts, which has
       // a dedicated branch for this type since (unlike a like or follow)
       // there's no other person's name to put in the message.
-      const locationLabel = location?.city ? `${location.city}${location.region ? ', ' + location.region : ''}` : null;
+      const locationLabel = location ? placeLabel(location) : null;
       await supabase.from('notifications').insert({
         user_id: userId,
         actor_id: userId,
@@ -97,6 +105,22 @@ async function syncStoredAccountProfile(session: Session) {
   }
 }
 
+// Where the Supabase client keeps the saved login ('sb-<project>-auth-token').
+const AUTH_STORAGE_KEY = 'sb-xxsfkjhfixognmnzixie-auth-token';
+
+async function readStoredSession(): Promise<Session | null> {
+  try {
+    const raw = await AsyncStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    return s?.refresh_token && s?.user ? (s as Session) : null;
+  } catch {
+    return null;
+  }
+}
+
+const looksLikeNetwork = (e: any) => /network|fetch|timeout|timed out|abort|connection|dns|resolve/i.test(String(e?.message || ''));
+
 type AuthContextType = {
   session: Session | null;
   initializing: boolean;
@@ -109,13 +133,62 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    let cancelled = false;
+    // True while the saved login is being used even though its short-lived
+    // token could not be renewed yet (weak or no connection).
+    let recovering = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Keeps trying to renew the token (2s, 4s, 8s ... up to every 30s).
+    const startRetry = (refreshToken: string) => {
+      let delay = 2000;
+      const attempt = async () => {
+        if (cancelled || !recovering) return;
+        try {
+          const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });
+          if (cancelled) return;
+          if (data?.session) return; // onAuthStateChange puts the fresh session in
+          if (error && !isAuthRetryableFetchError(error) && !looksLikeNetwork(error)) {
+            // The server really refused this login (revoked / changed password).
+            recovering = false;
+            setSession(null);
+            return;
+          }
+        } catch {
+          // network trouble: try again below
+        }
+        delay = Math.min(delay * 2, 30000);
+        retryTimer = setTimeout(attempt, delay);
+      };
+      retryTimer = setTimeout(attempt, delay);
+    };
+
+    supabase.auth.getSession().then(async ({ data, error }) => {
+      if (cancelled) return;
+      if (!data.session && error && (isAuthRetryableFetchError(error) || looksLikeNetwork(error))) {
+        // The saved login could not be renewed because the connection is bad.
+        // That is NOT being logged out: stay signed in and keep retrying.
+        const stored = await readStoredSession();
+        if (stored && !cancelled) {
+          recovering = true;
+          setSession(stored);
+          setInitializing(false);
+          startRetry(stored.refresh_token);
+          return;
+        }
+      }
       setSession(data.session);
       supabase.realtime.setAuth(data.session?.access_token ?? null);
       setInitializing(false);
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, newSession) => {
+      if (recovering) {
+        // Ignore "no session" reports while waiting for the connection, except a real sign-out.
+        if (!newSession && event !== 'SIGNED_OUT') return;
+        recovering = false;
+        if (retryTimer) clearTimeout(retryTimer);
+      }
       setSession(newSession);
       // Keep the Realtime websocket's auth token in sync with the current
       // session — without this, Realtime silently stops working once the
@@ -133,7 +206,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (event === 'SIGNED_IN' && newSession?.user?.id && !isAccountSwitchInProgress()) recordLogin(newSession.user.id);
     });
 
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
   return (

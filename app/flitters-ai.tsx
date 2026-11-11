@@ -1,23 +1,42 @@
+import { SITE_URL } from '@/lib/siteConfig';
 import { useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, ActivityIndicator, Image, Modal, KeyboardAvoidingView, Platform, Animated } from 'react-native';
+import { View, TextInput, TouchableOpacity, StyleSheet, FlatList, ActivityIndicator, Image, Modal, KeyboardAvoidingView, Platform, Animated } from 'react-native';
+import Text from '@/components/AppText';
 import { router } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/lib/ThemeContext';
+import { supabase } from '@/lib/supabase';
 import { spacing } from '@/lib/theme';
 
 type ChatMsg = { role: 'user' | 'assistant'; content: string; image?: string; loading?: boolean };
 
-function XChordLogo({ size = 34 }: { size?: number }) {
+// The AI endpoints now require sign-in (they used to be open to anyone, which
+// let strangers spend the AI credit). The app sends the same access token it
+// uses for everything else.
+async function authedHeaders(): Promise<Record<string, string>> {
+  const { data } = await supabase.auth.getSession();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (data.session?.access_token) headers.Authorization = `Bearer ${data.session.access_token}`;
+  return headers;
+}
+
+function errorTextFor(status: number): string {
+  if (status === 401) return 'Your session expired — please sign in again.';
+  if (status === 429) return "You're going a little fast — wait a minute and try again.";
+  return 'Something went wrong. Please try again.';
+}
+
+function FlittersAiLogo({ size = 34 }: { size?: number }) {
   return (
     <View style={[logoStyles.circle, { width: size, height: size, borderRadius: size / 2 }]}>
-      <Text style={[logoStyles.x, { fontSize: size * 0.55 }]}>X</Text>
+      <Text style={[logoStyles.x, { fontSize: size * 0.55 }]}>F</Text>
     </View>
   );
 }
 
 const logoStyles = StyleSheet.create({
   circle: {
-    backgroundColor: '#6C5CE7',
+    backgroundColor: '#1D8FEA',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
@@ -91,11 +110,16 @@ export default function FlittersAIScreen() {
     setText('');
     setSending(true);
     try {
-      const res = await fetch('https://xchord.space/api/flittersai', {
+      const res = await fetch(SITE_URL + '/api/flittersai', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authedHeaders(),
         body: JSON.stringify({ messages: newMessages, deepThink: false }),
       });
+      if (!res.ok) {
+        setSending(false);
+        setMessages((prev) => [...prev, { role: 'assistant', content: errorTextFor(res.status) }]);
+        return;
+      }
       const replyText = await res.text();
       setSending(false);
       revealReply(replyText);
@@ -112,16 +136,16 @@ export default function FlittersAIScreen() {
     setImageModalOpen(false);
     setImagePrompt('');
     try {
-      const res = await fetch('https://xchord.space/api/flittersai-image', {
+      const res = await fetch(SITE_URL + '/api/flittersai-image', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authedHeaders(),
         body: JSON.stringify({ prompt }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.image) {
         setMessages((prev) => [...prev, { role: 'assistant', content: '', image: data.image }]);
       } else {
-        setMessages((prev) => [...prev, { role: 'assistant', content: data.error || 'Image generation failed.' }]);
+        setMessages((prev) => [...prev, { role: 'assistant', content: res.ok ? 'Image generation failed.' : data.error || errorTextFor(res.status) }]);
       }
     } catch (e) {
       setMessages((prev) => [...prev, { role: 'assistant', content: 'Something went wrong generating the image.' }]);
@@ -137,8 +161,8 @@ export default function FlittersAIScreen() {
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <View style={styles.topBarCenter}>
-          <XChordLogo size={26} />
-          <Text style={[styles.topBarTitle, { color: colors.text }]}>xChord AI</Text>
+          <FlittersAiLogo size={26} />
+          <Text style={[styles.topBarTitle, { color: colors.text }]}>Flitters AI</Text>
         </View>
         <View style={{ width: 24 }} />
       </View>
@@ -163,8 +187,8 @@ export default function FlittersAIScreen() {
         ListFooterComponent={sending ? <SkeletonBubble color={colors.bubbleTheirs} /> : (generatingImage ? <SkeletonBubble color={colors.bubbleTheirs} /> : null)}
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <XChordLogo size={56} />
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>Ask xChord AI anything</Text>
+            <FlittersAiLogo size={56} />
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>Ask Flitters AI anything</Text>
             <Text style={[styles.emptySubtitle, { color: colors.subtext }]}>Get help writing posts, brainstorming ideas, or generating an image with the 🎨 button</Text>
           </View>
         }
@@ -176,7 +200,7 @@ export default function FlittersAIScreen() {
         </TouchableOpacity>
         <TextInput
           style={[styles.input, { backgroundColor: colors.inputBg, color: colors.text }]}
-          placeholder="Message xChord AI..."
+          placeholder="Message Flitters AI..."
           placeholderTextColor={colors.faint}
           value={text}
           onChangeText={setText}

@@ -1,5 +1,8 @@
 import { TouchableOpacity, StyleSheet, Animated, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { View } from 'react-native';
+import { useUnread } from '@/lib/UnreadContext';
 import { useTabBarVisibility, HIDE_DISTANCE } from '@/lib/tab-bar-visibility';
 import { useTheme } from '@/lib/ThemeContext';
 
@@ -12,8 +15,12 @@ const ICONS: Record<string, [string, string]> = {
 };
 
 export default function FloatingTabBar({ state, navigation }: any) {
+  // Sit above the phone's own navigation bar (3-button or gesture strip)
+  // instead of at a fixed height that it can overlap.
+  const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
   const { clamped } = useTabBarVisibility();
+  const { notifUnread, msgUnread } = useUnread();
   const focusedRoute = state.routes[state.index]?.name;
 
   if (focusedRoute === 'reels') return null;
@@ -25,6 +32,7 @@ export default function FloatingTabBar({ state, navigation }: any) {
     <Animated.View
       style={[
         styles.wrap,
+        { bottom: Platform.OS === 'ios' ? 30 : 12 + insets.bottom },
         {
           transform: [{ translateY }],
           opacity,
@@ -40,6 +48,7 @@ export default function FloatingTabBar({ state, navigation }: any) {
         const focused = state.index === index;
         const icons = ICONS[route.name] || ['ellipse-outline', 'ellipse'];
         const iconName = focused ? icons[1] : icons[0];
+        const showDot = (route.name === 'notifications' && notifUnread > 0) || (route.name === 'messages' && msgUnread > 0);
 
         return (
           <TouchableOpacity
@@ -50,7 +59,10 @@ export default function FloatingTabBar({ state, navigation }: any) {
               if (!focused && !event.defaultPrevented) navigation.navigate(route.name);
             }}
           >
-            <Ionicons name={iconName as any} size={24} color={focused ? colors.primary : colors.faint} />
+            <View>
+              <Ionicons name={iconName as any} size={24} color={focused ? colors.primary : colors.faint} />
+              {showDot && <View style={[styles.dot, { borderColor: colors.card }]} />}
+            </View>
           </TouchableOpacity>
         );
       })}
@@ -59,6 +71,7 @@ export default function FloatingTabBar({ state, navigation }: any) {
 }
 
 const styles = StyleSheet.create({
+  dot: { position: 'absolute', top: -2, right: -4, width: 11, height: 11, borderRadius: 6, backgroundColor: '#EF4444', borderWidth: 2 },
   wrap: {
     position: 'absolute',
     left: 20,

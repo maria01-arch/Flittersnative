@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { View, Text, FlatList, StyleSheet, ActivityIndicator, RefreshControl, TouchableOpacity } from 'react-native';
+import { View, FlatList, StyleSheet, ActivityIndicator, RefreshControl, TouchableOpacity } from 'react-native';
+import Text from '@/components/AppText';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
+import { useUnread } from '@/lib/UnreadContext';
 import { useAuth } from '@/lib/AuthContext';
 import { spacing } from '@/lib/theme';
 import { useTheme } from '@/lib/ThemeContext';
@@ -14,6 +16,8 @@ const iconFor = (type: string, colors: any) => {
   if (type === 'repost') return { name: 'repeat', color: colors.repost };
   if (type === 'comment') return { name: 'chatbubble', color: colors.primary };
   if (type === 'follow') return { name: 'person-add', color: '#F59E0B' };
+  if (type === 'mention') return { name: 'at', color: colors.primary };
+  if (type === 'coown') return { name: 'people', color: colors.primary };
   if (type === 'login_alert') return { name: 'shield-checkmark', color: colors.primary };
   return { name: 'notifications', color: colors.faint };
 };
@@ -26,12 +30,15 @@ const labelFor = (n: any) => {
   if (n.type === 'repost') return `${name} reposted your post`;
   if (n.type === 'comment') return `${name} commented on your post`;
   if (n.type === 'follow') return `${name} followed you`;
+  if (n.type === 'mention') return `${name} mentioned you in a post`;
+  if (n.type === 'coown') return `${name} added you as a co-owner of a post`;
   if (n.type === 'login_alert') return `New sign-in on ${platformLabel(n.meta_platform)}${n.meta_location ? ' near ' + n.meta_location : ''}`;
   return `${name} interacted with your content`;
 };
 
 export default function NotificationsScreen() {
   const { session } = useAuth();
+  const { refreshNotifs } = useUnread();
   const { colors, isDark } = useTheme();
   const [notifs, setNotifs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,7 +55,24 @@ export default function NotificationsScreen() {
     setNotifs(data || []);
     setLoading(false);
     setRefreshing(false);
-    supabase.from('notifications').update({ read: true }).eq('user_id', session.user.id).eq('read', false).then(() => {});
+    // Opening the tab marks everything read (the list above is already on
+    // screen, so unread ones stay highlighted for this visit).
+    supabase.from('notifications').update({ read: true }).eq('user_id', session.user.id).eq('read', false).then(() => refreshNotifs());
+  };
+
+  // The "Mark all as read" button is still here too, for pull-to-refresh
+  // visits where new ones have arrived.
+  const markAllRead = async () => {
+    if (!session?.user?.id) return;
+    setNotifs((prev) => prev.map((n) => ({ ...n, read: true })));
+    await supabase.from('notifications').update({ read: true }).eq('user_id', session.user.id).eq('read', false);
+    refreshNotifs();
+  };
+  const markOneRead = async (item: any) => {
+    if (item.read) return;
+    setNotifs((prev) => prev.map((n) => (n.id === item.id ? { ...n, read: true } : n)));
+    await supabase.from('notifications').update({ read: true }).eq('id', item.id);
+    refreshNotifs();
   };
 
   useEffect(() => {
@@ -72,10 +96,18 @@ export default function NotificationsScreen() {
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
       <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
         <Text style={[styles.topBarTitle, { color: colors.text }]}>Notifications</Text>
+        {notifs.some((n) => !n.read) && (
+          <TouchableOpacity onPress={markAllRead} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 13 }}>Mark all as read</Text>
+          </TouchableOpacity>
+        )}
       </View>
       <FlatList
         data={notifs}
         keyExtractor={(item) => item.id}
+        initialNumToRender={12}
+        maxToRenderPerBatch={8}
+        windowSize={9}
         contentContainerStyle={{ paddingBottom: 110 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         renderItem={({ item }) => {
@@ -85,10 +117,11 @@ export default function NotificationsScreen() {
               style={[
                 styles.row,
                 { borderBottomColor: colors.border },
-                !item.read && { backgroundColor: isDark ? 'rgba(139,124,246,0.14)' : '#F5F3FF' },
+                !item.read && { backgroundColor: isDark ? 'rgba(61,169,255,0.14)' : '#EAF5FF' },
               ]}
               onPress={() => {
-                if (['like', 'repost', 'comment'].includes(item.type) && item.post_id) {
+                markOneRead(item);
+                if (['like', 'repost', 'comment', 'mention', 'coown'].includes(item.type) && item.post_id) {
                   router.push(`/post/${item.post_id}`);
                 } else if (item.type === 'login_alert') {
                   router.push('/settings');
@@ -114,7 +147,7 @@ export default function NotificationsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  topBar: { paddingTop: 56, paddingBottom: 14, paddingHorizontal: spacing.lg, borderBottomWidth: 1 },
+  topBar: { paddingTop: 56, paddingBottom: 14, paddingHorizontal: spacing.lg, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   topBarTitle: { fontSize: 22, fontWeight: '800' },
   row: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, paddingHorizontal: spacing.lg, gap: 10, borderBottomWidth: 1 },
   iconWrap: { width: 26, alignItems: 'center' },

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated, Image, Dimensions } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, Animated, Image, Dimensions } from 'react-native';
+import Text from '@/components/AppText';
 import { router } from 'expo-router';
 import { useTheme } from '@/lib/ThemeContext';
 import { spacing } from '@/lib/theme';

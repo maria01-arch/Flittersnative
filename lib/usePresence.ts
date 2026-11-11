@@ -1,43 +1,102 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { AppState } from 'react-native';
 import { supabase } from './supabase';
 
 let sharedChannel: any = null;
 let sharedChannelUserId: string | null = null;
 let currentOnlineIds = new Set<string>();
 const listeners = new Set<(ids: Set<string>) => void>();
+let retry = 0;
+let retryTimer: any = null;
+let appSub: any = null;
+
+// Someone who drops off and comes back within a few seconds (weak network, phone
+// switching wifi/data) used to flash offline -> online. Now a person only shows as
+// offline after being gone for GRACE_MS in a row.
+const GRACE_MS = 25000;
+const lastSeenAt = new Map<string, number>();
+let graceTimer: any = null;
 
 function computeIds(channel: any) {
   const state = channel.presenceState();
-  const ids = new Set<string>();
+  const now = Date.now();
+  const live = new Set<string>();
   Object.values(state).forEach((arr: any) => {
     arr.forEach((p: any) => {
-      if (p.user_id) ids.add(p.user_id);
+      if (p.user_id) {
+        live.add(p.user_id);
+        lastSeenAt.set(p.user_id, now);
+      }
     });
   });
+  const ids = new Set<string>(live);
+  let pendingGrace = false;
+  lastSeenAt.forEach((t, id) => {
+    if (live.has(id)) return;
+    if (now - t < GRACE_MS) {
+      ids.add(id);
+      pendingGrace = true;
+    } else lastSeenAt.delete(id);
+  });
+  clearTimeout(graceTimer);
+  if (pendingGrace) graceTimer = setTimeout(() => sharedChannel && publish(sharedChannel), 5000);
   return ids;
+}
+
+function publish(channel: any) {
+  const next = computeIds(channel);
+  // no change -> no re-render anywhere
+  if (next.size === currentOnlineIds.size && [...next].every((i) => currentOnlineIds.has(i))) return;
+  currentOnlineIds = next;
+  listeners.forEach((cb) => cb(currentOnlineIds));
+}
+
+// (Re)builds the shared channel. On a weak connection the channel can drop
+// without telling anyone; before, nothing brought it back, so that phone
+// stopped showing as active (and stopped seeing others) until the app was
+// restarted. Now it retries with a short back-off and re-announces itself
+// whenever the app comes back to the screen.
+function build(userId: string) {
+  if (sharedChannel) {
+    try { supabase.removeChannel(sharedChannel); } catch {}
+    sharedChannel = null;
+  }
+  sharedChannelUserId = userId;
+  const channel = supabase.channel('online_users', { config: { presence: { key: userId } } });
+  channel.on('presence', { event: 'sync' }, () => publish(channel));
+  channel.subscribe(async (status: string) => {
+    if (sharedChannel !== channel) return;
+    if (status === 'SUBSCRIBED') {
+      retry = 0;
+      try { await channel.track({ user_id: userId, online_at: new Date().toISOString() }); } catch {}
+      publish(channel);
+    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+      clearTimeout(retryTimer);
+      const delay = Math.min(1000 * 2 ** retry, 15000);
+      retry += 1;
+      retryTimer = setTimeout(() => {
+        if (sharedChannelUserId === userId && AppState.currentState === 'active') build(userId);
+      }, delay);
+    }
+  });
+  sharedChannel = channel;
+  if (!appSub) {
+    appSub = AppState.addEventListener('change', (s) => {
+      if (s !== 'active' || !sharedChannelUserId) return;
+      const ch = sharedChannel;
+      if (ch && ch.state === 'joined') {
+        ch.track({ user_id: sharedChannelUserId, online_at: new Date().toISOString() }).catch(() => build(sharedChannelUserId!));
+      } else {
+        build(sharedChannelUserId);
+      }
+    });
+  }
+  return channel;
 }
 
 function getSharedChannel(userId: string) {
   if (sharedChannel && sharedChannelUserId === userId) return sharedChannel;
-  if (sharedChannel) {
-    supabase.removeChannel(sharedChannel);
-    sharedChannel = null;
-  }
-  sharedChannelUserId = userId;
-  const channel = supabase.channel('online_users');
-  channel.on('presence', { event: 'sync' }, () => {
-    currentOnlineIds = computeIds(channel);
-    listeners.forEach((cb) => cb(currentOnlineIds));
-  });
-  channel.subscribe(async (status: string) => {
-    if (status === 'SUBSCRIBED') {
-      await channel.track({ user_id: userId, online_at: new Date().toISOString() });
-      currentOnlineIds = computeIds(channel);
-      listeners.forEach((cb) => cb(currentOnlineIds));
-    }
-  });
-  sharedChannel = channel;
-  return channel;
+  return build(userId);
 }
 
 export function useOnlinePresence(currentUserId?: string) {

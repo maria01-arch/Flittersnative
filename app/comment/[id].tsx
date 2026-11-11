@@ -1,12 +1,18 @@
-import { useEffect, useState } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Alert } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { View, FlatList, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Image } from 'react-native';
+import Text from '@/components/AppText';
+import PasteTextInput from '@/components/PasteTextInput';
+import { useClipboardImage } from '@/lib/clipboardImage';
+import PasteImageChip from '@/components/PasteImageChip';
 import { useLocalSearchParams, router } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/ThemeContext';
 import { useAuth } from '@/lib/AuthContext';
+import KeyboardWrap from '@/components/KeyboardWrap';
 import CommentCard from '@/components/CommentCard';
-import { loadCommentTree } from '@/lib/comments';
+import { loadCommentTree, pickCommentImage } from '@/lib/comments';
+import { uploadImage } from '@/lib/upload';
 import { canPerform, permissionDeniedMessage } from '@/lib/permissions';
 
 export default function CommentThreadScreen() {
@@ -18,10 +24,25 @@ export default function CommentThreadScreen() {
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [replyImage, setReplyImage] = useState<string | null>(null);
+  const prefilled = useRef(false);
+  const clip = useClipboardImage();
+
+  // Replies start with @theirusername (the person you are answering) so everyone can tell who it is for.
+  const mention = (t: string) => {
+    const u = root?.author?.username;
+    return u && root?.user_id !== session?.user?.id && !t.startsWith('@') ? `@${u} ${t}` : t;
+  };
 
   const load = async () => {
     const { all, byId } = await loadCommentTree(postId as string, session?.user?.id);
-    setRoot(byId[id as string] || null);
+    const r = byId[id as string] || null;
+    setRoot(r);
+    // Start the reply box with @username once (not again after posting).
+    if (!prefilled.current && r?.author?.username && r.user_id !== session?.user?.id) {
+      prefilled.current = true;
+      setText((t) => (t ? t : `@${r.author.username} `));
+    }
     setReplies(all.filter((c: any) => c.reply_to_comment_id === id));
     setLoading(false);
   };
@@ -55,7 +76,7 @@ export default function CommentThreadScreen() {
   };
 
   const submitReply = async () => {
-    if (!text.trim() || !session?.user?.id || !root) return;
+    if ((!text.replace(/^@\S+\s*/, '').trim() && !replyImage) || !session?.user?.id || !root) return;
     // A reply is still a comment on the original post, so it's gated by
     // that post's who_can_comment — fetched here rather than on every
     // screen load, since replying is the only moment it matters.
@@ -66,16 +87,32 @@ export default function CommentThreadScreen() {
       return;
     }
     setSending(true);
-    await supabase.from('comments').insert({
+    let imageUrl: string | null = null;
+    if (replyImage) {
+      imageUrl = await uploadImage(replyImage, `posts/${session.user.id}`);
+      if (!imageUrl) {
+        Alert.alert("Couldn't upload the picture", 'Check your connection and try again.');
+        setSending(false);
+        return;
+      }
+    }
+    const { error: rErr } = await supabase.from('comments').insert({
       post_id: postId,
       user_id: session.user.id,
-      content: text.trim(),
+      content: mention(text.trim()),
       reply_to_comment_id: root.id,
+      ...(imageUrl ? { image_url: imageUrl } : {}),
     });
+    if (rErr) {
+      Alert.alert("Couldn't post", rErr.message);
+      setSending(false);
+      return;
+    }
     if (root.user_id && root.user_id !== session.user.id) {
       await supabase.from('notifications').insert({ user_id: root.user_id, actor_id: session.user.id, type: 'comment', post_id: postId });
     }
     setText('');
+    setReplyImage(null);
     await load();
     setSending(false);
   };
@@ -89,7 +126,7 @@ export default function CommentThreadScreen() {
   }
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}>
+    <KeyboardWrap style={{ flex: 1, backgroundColor: colors.bg }}>
       <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
         <TouchableOpacity onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color={colors.text} />
@@ -126,19 +163,40 @@ export default function CommentThreadScreen() {
         )}
         ListEmptyComponent={<Text style={[styles.empty, { color: colors.subtext }]}>No replies yet.</Text>}
       />
+      {replyImage && (
+        <View style={[styles.imgPreviewBar, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
+          <Image source={{ uri: replyImage }} style={styles.imgPreview} />
+          <TouchableOpacity onPress={() => setReplyImage(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close-circle" size={22} color={colors.subtext} />
+          </TouchableOpacity>
+        </View>
+      )}
+      {clip.has && !replyImage && (
+        <PasteImageChip
+          onPaste={async () => {
+            const u = await clip.take();
+            if (u) setReplyImage(u);
+          }}
+          onDismiss={clip.dismiss}
+        />
+      )}
       <View style={[styles.inputBar, { borderTopColor: colors.border, backgroundColor: colors.card }]}>
-        <TextInput
+        <TouchableOpacity onPress={async () => { const u = await pickCommentImage(); if (u) setReplyImage(u); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="image-outline" size={26} color={colors.primary} />
+        </TouchableOpacity>
+        <PasteTextInput
+              onPasteImage={(u) => setReplyImage(u)}
           style={[styles.input, { backgroundColor: colors.inputBg, color: colors.text }]}
-          placeholder="Write a reply..."
+          placeholder={replyImage ? 'Add a caption...' : 'Write a reply...'}
           placeholderTextColor={colors.faint}
           value={text}
           onChangeText={setText}
         />
-        <TouchableOpacity onPress={submitReply} disabled={sending || !text.trim()}>
-          <Ionicons name="send" size={22} color={text.trim() ? colors.primary : colors.faint} />
+        <TouchableOpacity onPress={submitReply} disabled={sending || (!text.trim() && !replyImage)}>
+          {sending ? <ActivityIndicator color={colors.primary} /> : <Ionicons name="send" size={24} color={text.trim() || replyImage ? colors.primary : colors.faint} />}
         </TouchableOpacity>
       </View>
-    </KeyboardAvoidingView>
+    </KeyboardWrap>
   );
 }
 
@@ -147,6 +205,8 @@ const styles = StyleSheet.create({
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 50, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1 },
   topBarTitle: { fontSize: 17, fontWeight: 'bold' },
   empty: { textAlign: 'center', marginTop: 30 },
-  inputBar: { flexDirection: 'row', alignItems: 'center', padding: 10, borderTopWidth: 1, gap: 10 },
-  input: { flex: 1, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, fontSize: 14 },
+  imgPreviewBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: 1 },
+  imgPreview: { width: 64, height: 64, borderRadius: 10 },
+  inputBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 12, borderTopWidth: 1, gap: 12 },
+  input: { flex: 1, borderRadius: 22, paddingHorizontal: 16, paddingVertical: 11, fontSize: 16, minHeight: 44, maxHeight: 120 },
 });

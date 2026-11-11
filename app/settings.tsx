@@ -1,12 +1,20 @@
 import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView, Switch, Modal, Alert, Pressable, Linking, TextInput } from 'react-native';
-import { router } from 'expo-router';
+import { View, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView, Switch, Modal, Alert, Pressable, Linking, TextInput } from 'react-native';
+import Text from '@/components/AppText';
+import { router, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
 import { usePreferences, FeedInterest, BrowserEngine } from '@/lib/PreferencesContext';
-import { isPushEnabled, setPushEnabled, getNotificationPermission } from '@/lib/usePushNotifications';
+import { onOwnBadgeChanged } from '@/lib/billingRefresh';
+import { getSoundsEnabled, setSoundsEnabled, playSound } from '@/lib/sounds';
+import { isPushEnabled, setPushEnabled, getNotificationPermission, unregisterPushToken, getPushStatus, registerPushNow } from '@/lib/usePushNotifications';
+import { deleteMyAccount } from '@/lib/deleteAccount';
+import { placeLabel } from '@/lib/approxLocation';
+import ChatThemeSheet from '@/components/ChatThemeSheet';
+import { ChatTheme, DEFAULT_THEME, loadChatTheme, saveChatTheme } from '@/lib/chatTheme';
+import { isVerifiedUser } from '@/lib/postActions';
 import { Permission } from '@/lib/permissions';
 import { acceptFollowRequest, declineFollowRequest } from '@/lib/followRequests';
 import { getStoredAccounts, switchToAccount, removeStoredAccount } from '@/lib/accounts';
@@ -69,6 +77,8 @@ export default function SettingsScreen() {
     showReposts,
     setShowReposts,
     dataSaverMode,
+    autoplayOnCellular,
+    setAutoplayOnCellular,
     setDataSaverMode,
     feedInterest,
     setFeedInterest,
@@ -78,6 +88,10 @@ export default function SettingsScreen() {
     setBrowserEngine,
   } = usePreferences();
   const [profile, setProfile] = useState<any>(null);
+  // The server re-checked the subscription: show the new badge right away.
+  useEffect(() => onOwnBadgeChanged((uid, patch) => {
+    if (uid === session?.user?.id) setProfile((p: any) => (p ? { ...p, ...patch } : p));
+  }), [session?.user?.id]);
   const [loading, setLoading] = useState(true);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [contentOpen, setContentOpen] = useState(false);
@@ -85,8 +99,27 @@ export default function SettingsScreen() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [pushOn, setPushOn] = useState(true);
+  const [soundsOn, setSoundsOn] = useState(true);
+  useEffect(() => {
+    getSoundsEnabled().then(setSoundsOn);
+  }, []);
+  const [pushStatus, setPushStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [permStatus, setPermStatus] = useState<string>('undetermined');
   const [privacyOpen, setPrivacyOpen] = useState(false);
+  // Default chat theme for every chat and group (a chat with its own theme keeps it).
+  const [themeOpen, setThemeOpen] = useState(false);
+  const [globalTheme, setGlobalTheme] = useState<ChatTheme>(DEFAULT_THEME);
+  const [themeVerified, setThemeVerified] = useState(false);
+  useEffect(() => {
+    loadChatTheme('global').then(setGlobalTheme);
+    isVerifiedUser(session?.user?.id).then(setThemeVerified);
+  }, [session?.user?.id]);
+  // The chat menu's "Chat privacy settings" opens this screen straight to
+  // Privacy and security.
+  const { section } = useLocalSearchParams<{ section?: string }>();
+  useEffect(() => {
+    if (section === 'privacy') setPrivacyOpen(true);
+  }, [section]);
   const [moderationOpen, setModerationOpen] = useState(false);
   const [requestsOpen, setRequestsOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
@@ -125,20 +158,26 @@ export default function SettingsScreen() {
 
   const respondToRequest = async (requesterId: string, accept: boolean) => {
     if (!session?.user?.id) return;
+    const before = followRequests;
     setFollowRequests((prev) => prev.filter((r) => r.id !== requesterId));
-    if (accept) await acceptFollowRequest(requesterId, session.user.id);
-    else await declineFollowRequest(requesterId, session.user.id);
+    if (accept) {
+      const ok = await acceptFollowRequest(requesterId, session.user.id);
+      if (!ok) {
+        setFollowRequests(before);
+        Alert.alert("Couldn't accept", 'This request may have been cancelled, or something went wrong. Please try again.');
+      }
+    } else await declineFollowRequest(requesterId, session.user.id);
   };
 
   useEffect(() => {
     if (!sessionsOpen || !session?.user?.id) return;
-    supabase
-      .from('login_history')
-      .select('platform,city,region,created_at')
-      .eq('user_id', session.user.id)
-      .order('created_at', { ascending: false })
-      .limit(20)
-      .then(({ data }) => setLoginHistory(data || []));
+    const uid = session.user.id;
+    (async () => {
+      let res: any = await supabase.from('login_history').select('platform,city,region,country,device_name,created_at').eq('user_id', uid).order('created_at', { ascending: false }).limit(20);
+      // Older database without the new columns: read what is there.
+      if (res.error) res = await supabase.from('login_history').select('platform,city,region,created_at').eq('user_id', uid).order('created_at', { ascending: false }).limit(20);
+      setLoginHistory(res.data || []);
+    })();
   }, [sessionsOpen, session]);
 
   const submitPasswordChange = async () => {
@@ -170,6 +209,7 @@ export default function SettingsScreen() {
   useEffect(() => {
     if (!notifOpen) return;
     getNotificationPermission().then(setPermStatus);
+    getPushStatus(session?.user?.id).then(setPushStatus);
   }, [notifOpen]);
 
   const togglePush = async (value: boolean) => {
@@ -194,6 +234,8 @@ export default function SettingsScreen() {
         style: 'destructive',
         onPress: async () => {
           const currentId = session?.user?.id;
+          // Stop this phone getting the old account's notifications.
+          if (currentId) await unregisterPushToken(currentId);
           if (currentId) await removeStoredAccount(currentId);
           // If another account is still saved on this device, hand off
           // to it instead of dropping all the way back to logged-out —
@@ -201,7 +243,7 @@ export default function SettingsScreen() {
           // everything" when there's somewhere else to land.
           const remaining = await getStoredAccounts();
           if (remaining.length > 0) {
-            const { error } = await switchToAccount(remaining[0].userId);
+            const { error } = await switchToAccount(remaining[0].userId, { skipPersist: true });
             if (!error) {
               router.replace('/(tabs)');
               return;
@@ -211,6 +253,38 @@ export default function SettingsScreen() {
         },
       },
     ]);
+  };
+
+  // Account deletion. Two deliberate steps — a warning, then typing the word
+  // DELETE — because it can't be undone and removes posts, messages and the
+  // account itself. Required by Google Play for any app with accounts.
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteText, setDeleteText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const closeDelete = () => {
+    if (deleting) return;
+    setDeleteOpen(false);
+    setDeleteText('');
+    setDeleteError('');
+  };
+
+  const confirmDelete = async () => {
+    if (deleteText.trim() !== 'DELETE' || deleting) return;
+    setDeleting(true);
+    setDeleteError('');
+    const result = await deleteMyAccount();
+    setDeleting(false);
+    if (result.error) {
+      setDeleteError(result.error);
+      return;
+    }
+    setDeleteOpen(false);
+    setDeleteText('');
+    // Signed out → the root layout sends you to the landing screen by
+    // itself. If another saved account took over, go to its feed instead.
+    if (result.switchedToOther) router.replace('/(tabs)');
   };
 
   const comingSoon = (feature: string) => Alert.alert(feature, "This isn't available yet — coming in a future update.");
@@ -239,16 +313,18 @@ export default function SettingsScreen() {
           <View>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
               <Text style={[styles.name, { color: colors.text }]}>{profile?.display_name || 'No name set'}</Text>
-              <VerifiedBadge verified={profile?.verified} isAuthentic={profile?.is_authentic} size={14} />
+              <VerifiedBadge verified={profile?.verified} isAuthentic={profile?.is_authentic} plan={profile?.verified_plan} size={14} />
             </View>
             <Text style={[styles.username, { color: colors.subtext }]}>@{profile?.username || 'unknown'}</Text>
           </View>
         </TouchableOpacity>
 
         <View style={{ marginTop: spacing.md }}>
+          <SettingsRow colors={colors} icon="bookmark-outline" label="Saved posts" onPress={() => router.push('/saved')} />
           <SettingsRow colors={colors} icon="person-outline" label="Account" onPress={() => router.push('/edit-profile')} />
           <SettingsRow colors={colors} icon="lock-closed-outline" label="Privacy and security" onPress={() => setPrivacyOpen(true)} />
           <SettingsRow colors={colors} icon="shield-outline" label="Moderation and content filters" onPress={() => setModerationOpen(true)} />
+          <SettingsRow colors={colors} icon="shield-checkmark-outline" label="Get verified" onPress={() => router.push('/get-verified')} />
           <SettingsRow colors={colors} icon="notifications-outline" label="Notifications" onPress={() => setNotifOpen(true)} />
           <SettingsRow colors={colors} icon="image-outline" label="Content and media" onPress={() => setContentOpen(true)} />
           <SettingsRow colors={colors} icon="color-palette-outline" label="Appearance" onPress={() => setAppearanceOpen(true)} />
@@ -259,6 +335,7 @@ export default function SettingsScreen() {
           <SettingsRow colors={colors} icon="information-circle-outline" label="About" onPress={() => setAboutOpen(true)} />
           <SettingsRow colors={colors} icon="swap-horizontal-outline" label="Switch account" onPress={() => router.push('/switch-account')} />
           <SettingsRow colors={colors} icon="log-out-outline" label="Sign Out" onPress={handleSignOut} danger />
+          <SettingsRow colors={colors} icon="trash-outline" label="Delete account" onPress={() => setDeleteOpen(true)} danger />
         </View>
       </ScrollView>
 
@@ -273,6 +350,7 @@ export default function SettingsScreen() {
             <Text style={[styles.title, { color: colors.text }]}>Appearance</Text>
             <View style={{ width: 24 }} />
           </View>
+          <SettingsRow colors={colors} icon="chatbubbles-outline" label="Chat theme" onPress={() => setThemeOpen(true)} />
           <View style={styles.section}>
             <Text style={[styles.sectionLabel, { color: colors.subtext }]}>Theme</Text>
             <View style={styles.themeRow}>
@@ -331,6 +409,18 @@ export default function SettingsScreen() {
               <Switch value={dataSaverMode} onValueChange={setDataSaverMode} trackColor={{ true: colors.primary }} />
             </View>
 
+            <View style={[styles.switchRow, { marginTop: 22 }]}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={[styles.sectionLabel, { color: colors.text, marginBottom: 0 }]}>Autoplay on mobile data</Text>
+                <Text style={{ color: colors.subtext, fontSize: 12, marginTop: 2 }}>
+                  {autoplayOnCellular
+                    ? 'Feed videos play automatically on Wi-Fi and mobile data.'
+                    : 'Feed videos only play automatically on Wi-Fi. On mobile data, tap a video to play it.'}
+                </Text>
+              </View>
+              <Switch value={autoplayOnCellular} onValueChange={setAutoplayOnCellular} trackColor={{ true: colors.primary }} />
+            </View>
+
             <Text style={[styles.sectionLabel, { color: colors.subtext, marginTop: 26 }]}>Feed interest</Text>
             <View style={styles.themeRow}>
               {(
@@ -349,7 +439,7 @@ export default function SettingsScreen() {
               ))}
             </View>
             <Text style={{ color: colors.subtext, fontSize: 12, marginTop: 8 }}>
-              {feedInterest === 'following' ? 'Your home feed only shows posts from people you follow.' : 'Your home feed shows everyone, newest first.'}
+              {feedInterest === 'following' ? 'Your home feed only shows posts from people you follow.' : 'Your home feed shows posts picked for you: people you follow, what you like, and some new voices.'}
             </Text>
           </View>
         </View>
@@ -464,6 +554,44 @@ export default function SettingsScreen() {
               </View>
               <Switch value={pushOn} onValueChange={togglePush} trackColor={{ true: colors.primary }} />
             </View>
+            <View style={[styles.switchRow, { marginTop: 18 }]}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={[styles.sectionLabel, { color: colors.text, marginBottom: 0 }]}>Sounds</Text>
+                <Text style={{ color: colors.subtext, fontSize: 12, marginTop: 2 }}>Soft sounds for new messages, sending and likes</Text>
+              </View>
+              <Switch
+                value={soundsOn}
+                onValueChange={async (v) => {
+                  setSoundsOn(v);
+                  await setSoundsEnabled(v);
+                  if (v) playSound('like');
+                }}
+                trackColor={{ true: colors.primary }}
+              />
+            </View>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+              {([['Typing', 'typing'], ['Sent', 'send'], ['New message', 'incoming'], ['Like', 'like']] as const).map(([label, key]) => (
+                <TouchableOpacity key={key} onPress={() => playSound(key, true)} style={{ paddingHorizontal: 12, paddingVertical: 7, borderRadius: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.inputBg }}>
+                  <Text style={{ color: colors.text, fontSize: 12, fontWeight: '600' }}>▶ {label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {pushStatus && (
+              <View style={{ marginTop: 18 }}>
+                <Text style={{ color: pushStatus.ok ? '#22C55E' : colors.danger, fontSize: 13, fontWeight: '600' }}>{pushStatus.ok ? '✓ ' : '⚠ '}{pushStatus.text}</Text>
+                {!pushStatus.ok && (
+                  <TouchableOpacity
+                    style={{ marginTop: 8, alignSelf: 'flex-start', backgroundColor: colors.primary, borderRadius: 16, paddingVertical: 8, paddingHorizontal: 16 }}
+                    onPress={async () => {
+                      setPushOn(true);
+                      setPushStatus(await registerPushNow(session!.user.id));
+                    }}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700' }}>Fix: register this phone</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
             {permStatus === 'denied' && (
               <TouchableOpacity style={{ marginTop: 18 }} onPress={() => Linking.openSettings()}>
                 <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '600' }}>
@@ -496,6 +624,20 @@ export default function SettingsScreen() {
                 </View>
                 <Switch value={!!profile?.is_private} onValueChange={(v) => updateProfileField('is_private', v)} trackColor={{ true: colors.primary }} />
               </View>
+
+              {[
+                { field: 'show_read_receipts', label: 'Read receipts', desc: "When off, people can't see when you've read their messages, and you can't see when they've read yours." },
+                { field: 'show_last_seen', label: 'Last seen', desc: "When off, people can't see when you were last online, and you can't see theirs. \"Active now\" still shows while you're in the app." },
+                { field: 'allow_coowners', label: 'Allow co-owning posts', desc: 'When off, nobody can add you as a co-owner of their post.' },
+              ].map((row) => (
+                <View key={row.field} style={[styles.switchRow, { marginTop: 18 }]}>
+                  <View style={{ flex: 1, marginRight: 12 }}>
+                    <Text style={[styles.sectionLabel, { color: colors.text, marginBottom: 0 }]}>{row.label}</Text>
+                    <Text style={{ color: colors.subtext, fontSize: 12, marginTop: 2 }}>{row.desc}</Text>
+                  </View>
+                  <Switch value={profile?.[row.field] !== false} onValueChange={(v) => updateProfileField(row.field, v)} trackColor={{ true: colors.primary }} />
+                </View>
+              ))}
 
               <Text style={[styles.sectionLabel, { color: colors.subtext, marginTop: 26 }]}>Who can message me</Text>
               <PermissionPicker
@@ -592,10 +734,7 @@ export default function SettingsScreen() {
             <TextInput
               style={[styles.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
               value={newPassword}
-              // Same lowercase-only rule as login/signup — a password set
-              // here has to be typeable back at login, so it can't accept
-              // characters login itself won't.
-              onChangeText={(t) => setNewPassword(t.toLowerCase())}
+              onChangeText={setNewPassword}
               placeholder="At least 6 characters"
               placeholderTextColor={colors.faint}
               autoCapitalize="none"
@@ -605,7 +744,7 @@ export default function SettingsScreen() {
             <TextInput
               style={[styles.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
               value={confirmPassword}
-              onChangeText={(t) => setConfirmPassword(t.toLowerCase())}
+              onChangeText={setConfirmPassword}
               placeholder="Re-enter your new password"
               placeholderTextColor={colors.faint}
               autoCapitalize="none"
@@ -638,7 +777,7 @@ export default function SettingsScreen() {
             <View style={{ width: 24 }} />
           </View>
           <Text style={{ color: colors.subtext, fontSize: 12, paddingHorizontal: spacing.lg, paddingTop: 14 }}>
-            A log of sign-ins to your account. Don't recognize one? Change your password above — it signs every other device out.
+            A log of sign-ins to your account, with the device name and an approximate place (worked out from the internet connection, not your exact location). Don't recognize one? Change your password above — it signs every other device out.
           </Text>
           <ScrollView style={{ marginTop: 10 }}>
             {loginHistory.length === 0 && <Text style={{ color: colors.subtext, textAlign: 'center', marginTop: 30 }}>Nothing logged yet.</Text>}
@@ -647,13 +786,73 @@ export default function SettingsScreen() {
                 <Ionicons name={row.platform === 'ios' ? 'logo-apple' : 'logo-android'} size={20} color={colors.text} />
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.rowText, { color: colors.text }]}>
-                    {row.platform === 'ios' ? 'iOS device' : 'Android device'}
-                    {row.city ? ` · ${row.city}${row.region ? ', ' + row.region : ''}` : ''}
+                    {row.device_name || (row.platform === 'ios' ? 'iOS device' : 'Android device')}
+                  </Text>
+                  <Text style={{ color: colors.subtext, fontSize: 12.5, marginTop: 1 }}>
+                    {placeLabel(row) ? `Near ${placeLabel(row)}` : 'Location unknown'}
                   </Text>
                   <Text style={{ color: colors.subtext, fontSize: 12 }}>{new Date(row.created_at).toLocaleString()}</Text>
                 </View>
               </View>
             ))}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <ChatThemeSheet
+        visible={themeOpen}
+        onClose={() => setThemeOpen(false)}
+        conversationId="global"
+        theme={globalTheme}
+        verified={themeVerified}
+        note="Applies to all your chats and groups. A chat you customised on its own keeps its own theme."
+        onChange={(t) => {
+          setGlobalTheme(t);
+          saveChatTheme('global', t);
+        }}
+      />
+
+      {/* Delete account */}
+      <Modal visible={deleteOpen} animationType="slide" onRequestClose={closeDelete}>
+        <View style={[styles.container, { backgroundColor: colors.bg }]}>
+          <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity onPress={closeDelete} disabled={deleting}>
+              <Ionicons name="arrow-back" size={24} color={colors.text} />
+            </TouchableOpacity>
+            <Text style={[styles.title, { color: colors.text }]}>Delete account</Text>
+            <View style={{ width: 24 }} />
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.section}>
+            <Text style={{ color: colors.danger, fontSize: 16, fontWeight: '800', marginBottom: 10 }}>This is permanent</Text>
+            <Text style={{ color: colors.text, fontSize: 14, lineHeight: 21 }}>
+              Deleting your account permanently removes your profile, posts, reels, comments, likes, followers, messages and saved settings. It can't be undone and we can't recover it afterwards.
+            </Text>
+            <Text style={[styles.sectionLabel, { color: colors.subtext, marginTop: 24 }]}>Type DELETE to confirm</Text>
+            <TextInput
+              style={[styles.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
+              value={deleteText}
+              onChangeText={setDeleteText}
+              placeholder="DELETE"
+              placeholderTextColor={colors.faint}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              editable={!deleting}
+            />
+            {!!deleteError && <Text style={{ color: colors.danger, marginTop: 12 }}>{deleteError}</Text>}
+            <TouchableOpacity
+              style={{
+                backgroundColor: colors.danger,
+                borderRadius: 12,
+                paddingVertical: 15,
+                alignItems: 'center',
+                marginTop: 20,
+                opacity: deleteText.trim() === 'DELETE' && !deleting ? 1 : 0.4,
+              }}
+              onPress={confirmDelete}
+              disabled={deleteText.trim() !== 'DELETE' || deleting}
+            >
+              {deleting ? <ActivityIndicator color="#fff" /> : <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>Permanently delete my account</Text>}
+            </TouchableOpacity>
           </ScrollView>
         </View>
       </Modal>

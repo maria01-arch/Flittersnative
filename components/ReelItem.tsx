@@ -1,15 +1,21 @@
 import { useEffect, useState } from 'react';
-import { View, Text, Image, TextInput, TouchableOpacity, StyleSheet, Dimensions, Pressable, ActivityIndicator } from 'react-native';
+import { View, Image, TextInput, TouchableOpacity, StyleSheet, Dimensions, Pressable, ActivityIndicator } from 'react-native';
+import { requestOpenReel } from '@/lib/reelOpen';
+import Text from '@/components/AppText';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { usePreferences } from '@/lib/PreferencesContext';
 import { useVideoStatus } from '@/lib/useVideoStatus';
+import { useVideoWatchdog } from '@/lib/useVideoWatchdog';
+import AnimatedHeart from './AnimatedHeart';
 import { useAuth } from '@/lib/AuthContext';
+import { saveVideoIfAllowed } from '@/lib/download';
 import { supabase } from '@/lib/supabase';
 import ReelCommentsSheet from './ReelCommentsSheet';
 import Avatar from './Avatar';
 import VerifiedBadge from './VerifiedBadge';
+import FollowButton from './FollowButton';
 
 const { height: SCREEN_H } = Dimensions.get('window');
 
@@ -20,6 +26,7 @@ export default function ReelItem({
   isMine,
   height,
   onLike,
+  onRepost,
   onDelete,
   onCommentPosted,
 }: {
@@ -40,6 +47,7 @@ export default function ReelItem({
   isMine?: boolean;
   height?: number;
   onLike: (reel: any) => void;
+  onRepost?: (reel: any) => void;
   onDelete?: (reel: any) => void;
   onCommentPosted?: (reel: any) => void;
 }) {
@@ -51,6 +59,10 @@ export default function ReelItem({
   const [sendingQuick, setSendingQuick] = useState(false);
   const player = useVideoPlayer(shouldLoad ? reel.video_url : null, (p) => {
     p.loop = true;
+    // Don't let the player pull a whole video ahead of time — see PostVideo.
+    try {
+      (p as any).bufferOptions = { preferredForwardBufferDuration: 6, minBufferForPlayback: 1, maxBufferBytes: 10 * 1024 * 1024, prioritizeTimeOverSizeThreshold: true };
+    } catch {}
   });
 
   useEffect(() => {
@@ -60,6 +72,8 @@ export default function ReelItem({
       else player.pause();
     } catch {}
   }, [active, userPaused, autoplayVideos, player]);
+
+  useVideoWatchdog(player, active && !userPaused && autoplayVideos, shouldLoad ? reel.video_url : null);
 
   useEffect(() => {
     if (!active) setUserPaused(false);
@@ -82,7 +96,8 @@ export default function ReelItem({
     const content = quickComment.trim();
     if (!content || !session?.user?.id) return;
     setSendingQuick(true);
-    const { error } = await supabase.from('comments').insert({ reel_id: reel.id, user_id: session.user.id, content });
+    // A video post's comments live on the post, so they show there too.
+    const { error } = await supabase.from('comments').insert(reel.post_id ? { post_id: reel.post_id, user_id: session.user.id, content } : { reel_id: reel.id, user_id: session.user.id, content });
     setSendingQuick(false);
     if (error) {
       console.error('[ReelItem] quick comment failed:', error.message, error);
@@ -102,7 +117,7 @@ export default function ReelItem({
   return (
     <View style={[styles.container, height ? { height } : null]}>
       <Pressable style={StyleSheet.absoluteFill} onPress={togglePlay}>
-        <VideoView player={player} style={styles.video} contentFit="cover" nativeControls={false} />
+        <VideoView player={player} style={styles.video} contentFit="contain" nativeControls={false} />
         {(userPaused || !autoplayVideos || notReady) && (
           // Paused, autoplay off, or just not loaded/ready yet — same overlay either way.
           <View style={styles.pausedOverlay}>
@@ -110,23 +125,56 @@ export default function ReelItem({
           </View>
         )}
       </Pressable>
+      {!!reel.post_id && (
+        <TouchableOpacity
+          style={styles.viewPost}
+          activeOpacity={0.8}
+          onPress={() => router.push({ pathname: '/post/[id]', params: { id: reel.post_id, fromReels: '1' } })}
+        >
+          <Ionicons name="document-text-outline" size={14} color="#fff" />
+          <Text style={styles.viewPostText}>View post</Text>
+          <Ionicons name="chevron-forward" size={14} color="#fff" />
+        </TouchableOpacity>
+      )}
       <View style={styles.overlay} pointerEvents="box-none">
         <View style={styles.bottomInfo}>
           <TouchableOpacity style={styles.authorRow} onPress={() => reel.author?.id && router.push(`/user/${reel.author.id}`)}>
             <Avatar uri={reel.author?.avatar_url} size={32} />
             <Text style={styles.authorName}>{reel.author?.display_name}</Text>
-            <VerifiedBadge verified={reel.author?.verified} isAuthentic={reel.author?.is_authentic} size={13} />
+            <VerifiedBadge verified={reel.author?.verified} isAuthentic={reel.author?.is_authentic} plan={reel.author?.verified_plan} size={13} />
+            <FollowButton userId={reel.author?.id || reel.user_id} />
           </TouchableOpacity>
+          {!!reel.reply_to_comment_id && (
+            <TouchableOpacity
+              disabled={!reel.reply_to_reel_id}
+              onPress={() => reel.reply_to_reel_id && requestOpenReel(String(reel.reply_to_reel_id))}
+              style={styles.replyChip}
+            >
+              <Ionicons name="return-down-forward" size={14} color="#fff" />
+              <Text style={styles.replyChipText} numberOfLines={1}>
+                Replying to {reel.reply_to_name ? '@' + reel.reply_to_name : 'a comment'}{reel.reply_to_text ? ': ' + reel.reply_to_text : ''}
+              </Text>
+            </TouchableOpacity>
+          )}
           {!!reel.caption && <Text style={styles.caption} numberOfLines={2}>{reel.caption}</Text>}
         </View>
         <View style={styles.actions}>
           <TouchableOpacity style={styles.actionBtn} onPress={() => onLike(reel)}>
-            <Ionicons name={reel.liked_by_me ? 'heart' : 'heart-outline'} size={30} color={reel.liked_by_me ? '#F91880' : '#fff'} />
+            <AnimatedHeart liked={!!reel.liked_by_me} size={30} color="#F91880" offColor="#fff" />
             <Text style={styles.actionText}>{reel.likes_count || 0}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.actionBtn} onPress={() => setCommentsOpen(true)}>
             <Ionicons name="chatbubble-outline" size={27} color="#fff" />
             <Text style={styles.actionText}>{reel.comments_count || 0}</Text>
+          </TouchableOpacity>
+          {!!reel.post_id && (
+            <TouchableOpacity style={styles.actionBtn} onPress={() => onRepost && onRepost(reel)}>
+              <Ionicons name="repeat" size={29} color={reel.reposted_by_me ? '#00BA7C' : '#fff'} />
+              <Text style={styles.actionText}>{reel.reposts_count || 0}</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.actionBtn} onPress={() => saveVideoIfAllowed(session?.user?.id, reel.video_url)}>
+            <Ionicons name="download-outline" size={27} color="#fff" />
           </TouchableOpacity>
           {isMine && (
             <TouchableOpacity style={styles.actionBtn} onPress={() => onDelete && onDelete(reel)}>
@@ -154,6 +202,8 @@ export default function ReelItem({
       </View>
       <ReelCommentsSheet
         reelId={reel.id}
+        postId={reel.post_id || null}
+        notifyUserId={reel.user_id}
         visible={commentsOpen}
         onClose={() => setCommentsOpen(false)}
         onCommentPosted={() => onCommentPosted?.(reel)}
@@ -165,12 +215,16 @@ export default function ReelItem({
 const styles = StyleSheet.create({
   container: { width: '100%', height: SCREEN_H, backgroundColor: '#000' },
   video: { width: '100%', height: '100%' },
+  viewPost: { position: 'absolute', top: 58, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.14)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
+  viewPostText: { color: '#fff', fontWeight: '700', fontSize: 13 },
   pausedOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' },
   overlay: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'flex-end', padding: 16, paddingBottom: 110 },
   bottomInfo: { flex: 1, paddingRight: 60 },
   authorRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   avatar: { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: '#fff' },
   authorName: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  replyChip: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', maxWidth: '92%', marginTop: 8, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.22)' },
+  replyChipText: { color: '#fff', fontSize: 12, fontWeight: '600', flexShrink: 1 },
   caption: { color: '#fff', fontSize: 14, marginTop: 8, lineHeight: 19 },
   actions: { alignItems: 'center', gap: 22 },
   actionBtn: { alignItems: 'center', gap: 4 },

@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Modal, View, Text, TextInput, TouchableOpacity, StyleSheet, Pressable, ActivityIndicator, Alert } from 'react-native';
+import { Modal, View, TextInput, TouchableOpacity, StyleSheet, Pressable, ActivityIndicator, Alert } from 'react-native';
+import Text from '@/components/AppText';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/lib/ThemeContext';
 import { spacing } from '@/lib/theme';

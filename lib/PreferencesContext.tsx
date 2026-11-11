@@ -19,6 +19,9 @@ type PrefsContextValue = {
   // window size changes.
   dataSaverMode: boolean;
   setDataSaverMode: (v: boolean) => void;
+  // Feed videos autoplay on Wi-Fi only, unless this is switched on.
+  autoplayOnCellular: boolean;
+  setAutoplayOnCellular: (v: boolean) => void;
   // "Links and Preview" (was "Accessibility")
   showLinkPreviews: boolean;
   setShowLinkPreviews: (v: boolean) => void;
@@ -34,6 +37,8 @@ const defaults: PrefsContextValue = {
   feedInterest: 'foryou',
   setFeedInterest: () => {},
   dataSaverMode: true,
+  autoplayOnCellular: false,
+  setAutoplayOnCellular: () => {},
   setDataSaverMode: () => {},
   showLinkPreviews: true,
   setShowLinkPreviews: () => {},
@@ -52,12 +57,16 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const [showReposts, setShowRepostsState] = useState(true);
   const [feedInterest, setFeedInterestState] = useState<FeedInterest>('foryou');
   const [dataSaverMode, setDataSaverState] = useState(true);
+  const [autoplayOnCellular, setAutoplayOnCellularState] = useState(false);
   const [showLinkPreviews, setShowLinkPreviewsState] = useState(true);
   const [browserEngine, setBrowserEngineState] = useState<BrowserEngine>('in-app');
 
   useEffect(() => {
     AsyncStorage.getItem('autoplay_videos').then((v) => {
       if (v === 'false') setAutoplayState(false);
+    });
+    AsyncStorage.getItem('autoplay_on_cellular').then((v) => {
+      if (v === 'true') setAutoplayOnCellularState(true);
     });
     AsyncStorage.getItem('show_reposts').then((v) => {
       if (v === 'false') setShowRepostsState(false);
@@ -88,6 +97,10 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     setFeedInterestState(v);
     AsyncStorage.setItem('feed_interest', v);
   };
+  const setAutoplayOnCellular = (v: boolean) => {
+    setAutoplayOnCellularState(v);
+    AsyncStorage.setItem('autoplay_on_cellular', v ? 'true' : 'false');
+  };
   const setDataSaverMode = (v: boolean) => {
     setDataSaverState(v);
     AsyncStorage.setItem('data_saver_mode', v ? 'true' : 'false');
@@ -112,6 +125,8 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         setFeedInterest,
         dataSaverMode,
         setDataSaverMode,
+        autoplayOnCellular,
+        setAutoplayOnCellular,
         showLinkPreviews,
         setShowLinkPreviews,
         browserEngine,

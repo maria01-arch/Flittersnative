@@ -8,25 +8,59 @@ if (process.env.GOOGLE_SERVICES_BASE64) {
   fs.writeFileSync(filePath, fileContent);
 }
 
+const site = require('./site.config.js');
+
+let hasShareIntent = false;
+try {
+  require.resolve('expo-share-intent/package.json');
+  hasShareIntent = true;
+} catch (e) {
+  hasShareIntent = false;
+}
+
+// Saving pictures/videos to the gallery. Added to the build only once the package is installed.
+let hasMediaLibrary = false;
+try {
+  require.resolve('expo-media-library/package.json');
+  hasMediaLibrary = true;
+} catch (e) {
+  hasMediaLibrary = false;
+}
+
 module.exports = {
   expo: {
     name: "Flitters",
     slug: "flitters-native",
-    version: "1.0.0",
+    version: "1.0.4",
     orientation: "portrait",
     icon: "./assets/images/flitters-app-icon.png",
     scheme: "flittersnative",
     userInterfaceStyle: "automatic",
     newArchEnabled: true,
     jsEngine: "hermes",
-    backgroundColor: "#0B0F17",
+    backgroundColor: "#05060A",
     ios: {
       supportsTablet: true
     },
     android: {
+      // Stops the phone's backup from copying the app's saved sign-in to another device.
+      allowBackup: false,
+      // Links to xchord.space open the app instead of the browser. For Android
+      // to trust this, the website must list this app in its assetlinks.json
+      // (see the setup steps in the chat).
+      intentFilters: [
+        {
+          action: 'VIEW',
+          autoVerify: true,
+          data: site.ALL_HOSTS.flatMap((host) =>
+            ['/join', '/p/', '/post/', '/user/', '/u/', '/hashtag/'].map((pathPrefix) => ({ scheme: 'https', host, pathPrefix }))
+          ),
+          category: ['BROWSABLE', 'DEFAULT'],
+        },
+      ],
       adaptiveIcon: {
-        backgroundColor: "#6C5CE7",
-        foregroundImage: "./assets/images/flitters-app-icon.png",
+        backgroundColor: "#000000",
+        foregroundImage: "./assets/images/android-icon-foreground.png",
         backgroundImage: "./assets/images/android-icon-background.png",
         monochromeImage: "./assets/images/android-icon-monochrome.png"
       },
@@ -55,7 +89,11 @@ module.exports = {
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "android.permission.SYSTEM_ALERT_WINDOW",
-        "android.permission.RECEIVE_BOOT_COMPLETED"
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        // Location is never used (login history uses an approximate place from
+        // the internet connection), so the app must not even declare it.
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
       ]
     },
     web: {
@@ -64,6 +102,23 @@ module.exports = {
     },
     plugins: [
       "expo-router",
+      "expo-iap",
+      ...(hasMediaLibrary ? [["expo-media-library", { savePhotosPermission: "Flitters saves the pictures and videos you choose to your gallery.", isAccessMediaLocationEnabled: false }]] : []),
+      // Lets Flitters appear in the phone's Share list (text, links, photos,
+      // videos). Android only; needs an EAS build. Skipped quietly when the
+      // package is not installed yet, so the app still starts.
+      ...(hasShareIntent
+        ? [
+            [
+              "expo-share-intent",
+              {
+                disableIOS: true,
+                androidIntentFilters: ["text/*", "image/*", "video/*"],
+                androidMultiIntentFilters: ["image/*", "video/*"]
+              }
+            ]
+          ]
+        : []),
       [
         "expo-splash-screen",
         {
@@ -80,7 +135,7 @@ module.exports = {
           // outline would need a version of the PNG with one baked in.
           backgroundColor: "#F4F2FA",
           dark: {
-            backgroundColor: "#0B0F17"
+            backgroundColor: "#05060A"
           }
         }
       ],
@@ -94,19 +149,15 @@ module.exports = {
         "expo-notifications",
         {
           icon: "./assets/images/flitters-logo.png",
-          color: "#6C5CE7"
+          color: "#3DA9FF",
+          // The Flitters notification sound (needs a new EAS build to take effect).
+          sounds: ["./assets/sounds/flit.wav"]
         }
       ],
       [
         "expo-audio",
         {
           microphonePermission: "Allow Flitters to access your microphone."
-        }
-      ],
-      [
-        "expo-location",
-        {
-          locationWhenInUsePermission: "Allow Flitters to use your location to power suggestions and help keep your account secure. Location is only ever used while the app is open."
         }
       ]
     ],
@@ -117,7 +168,7 @@ module.exports = {
     extra: {
       router: {},
       eas: {
-        projectId: "ef10ac98-f4c6-49f4-9696-ec91ea12ba2c"
+        projectId: "8593f64a-594b-4a8c-b73f-36ff25480d9d"
       }
     }
   }

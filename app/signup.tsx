@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Image, Modal, FlatList, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, TextInput, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Image, Modal, FlatList, KeyboardAvoidingView, Platform } from 'react-native';
+import Text from '@/components/AppText';
 import { router, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as ImagePicker from 'expo-image-picker';
@@ -7,6 +8,8 @@ import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/ThemeContext';
 import { spacing } from '@/lib/theme';
 import { persistCurrentSession, setAddingAccountMode } from '@/lib/accounts';
+import { uploadImage } from '@/lib/upload';
+import DatePickerSheet, { formatDob } from '@/components/DatePickerSheet';
 
 const COUNTRIES = [
   'United States', 'United Kingdom', 'Canada', 'Nigeria', 'Ghana', 'Kenya', 'South Africa',
@@ -46,6 +49,7 @@ export default function SignupScreen() {
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
   const [dob, setDob] = useState('');
+  const [dobOpen, setDobOpen] = useState(false);
   const [country, setCountry] = useState('');
   const [countryModalOpen, setCountryModalOpen] = useState(false);
   const [email, setEmail] = useState('');
@@ -84,11 +88,12 @@ export default function SignupScreen() {
     if (step === 1) {
       if (!displayName.trim()) return 'Please enter your name';
       if (username.trim().length < 3) return 'Username must be at least 3 characters';
+      if (!/^[a-z0-9_]+$/.test(username.trim())) return 'Username can only use small letters, numbers and underscore (_)';
       if (usernameStatus === 'taken') return 'That username is already taken';
       if (usernameStatus === 'checking') return "Still checking that username — give it a moment";
     }
     if (step === 2) {
-      if (!dob.trim()) return 'Please enter your date of birth';
+      if (!dob.trim()) return 'Please select your birthday';
       const age = (Date.now() - new Date(dob).getTime()) / (1000 * 60 * 60 * 24 * 365.25);
       if (isNaN(age) || age < 13) return 'You must be at least 13 years old';
       if (!country) return 'Please select your country';
@@ -130,18 +135,15 @@ export default function SignupScreen() {
     if (!result.canceled && result.assets?.[0]) setAvatarUri(result.assets[0].uri);
   };
 
+  // Same upload path as everywhere else in the app (native file upload to
+  // R2). The old version read the file with fetch().arrayBuffer() into
+  // Supabase Storage — the exact approach that was already proven
+  // unreliable in React Native for other uploads.
   const uploadAvatarIfNeeded = async (userId: string) => {
     if (!avatarUri) return;
     try {
-      const fileRes = await fetch(avatarUri);
-      const arrayBuffer = await fileRes.arrayBuffer();
-      const ext = avatarUri.split('.').pop() || 'jpg';
-      const path = `${userId}.${ext}`;
-      await supabase.storage.from('avatars').upload(path, arrayBuffer, { contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}`, upsert: true });
-      const { data } = supabase.storage.from('avatars').getPublicUrl(path);
-      if (data?.publicUrl) {
-        await supabase.from('profiles').update({ avatar_url: `${data.publicUrl}?t=${Date.now()}` }).eq('id', userId);
-      }
+      const url = await uploadImage(avatarUri, `avatars/${userId}`);
+      if (url) await supabase.from('profiles').update({ avatar_url: url }).eq('id', userId);
     } catch (e) {
       console.log('avatar upload failed', e);
     }
@@ -261,7 +263,9 @@ export default function SignupScreen() {
               placeholderTextColor={colors.faint}
               autoCapitalize="none"
               value={username}
-              onChangeText={setUsername}
+              onChangeText={(t) => setUsername(t.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+              maxLength={30}
+              autoCorrect={false}
             />
             {usernameStatus === 'checking' && (
               <View style={styles.usernameStatusRow}>
@@ -288,14 +292,11 @@ export default function SignupScreen() {
           <View style={styles.stepContent}>
             <Text style={[styles.stepTitle, { color: colors.text }]}>When were you born?</Text>
             <Text style={[styles.stepSubtitle, { color: colors.subtext }]}>Your date of birth won't be shown publicly</Text>
-            <TextInput
-              style={[styles.input, { borderColor: colors.border, color: colors.text }]}
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor={colors.faint}
-              value={dob}
-              onChangeText={setDob}
-              keyboardType="numbers-and-punctuation"
-            />
+            <TouchableOpacity style={[styles.input, styles.selectInput, { borderColor: colors.border }]} onPress={() => setDobOpen(true)}>
+              <Text style={{ color: dob ? colors.text : colors.faint, fontSize: 15 }}>{dob ? formatDob(dob) : 'Select your birthday'}</Text>
+              <Ionicons name="calendar-outline" size={18} color={colors.faint} />
+            </TouchableOpacity>
+            <DatePickerSheet visible={dobOpen} value={dob} onClose={() => setDobOpen(false)} onConfirm={(iso) => { setDob(iso); setDobOpen(false); }} />
             <TouchableOpacity style={[styles.input, styles.selectInput, { borderColor: colors.border }]} onPress={() => setCountryModalOpen(true)}>
               <Text style={{ color: country ? colors.text : colors.faint, fontSize: 15 }}>{country || 'Select your country'}</Text>
               <Ionicons name="chevron-down" size={18} color={colors.faint} />
@@ -323,12 +324,7 @@ export default function SignupScreen() {
               autoCapitalize="none"
               secureTextEntry
               value={password}
-              // Passwords are strictly lowercase — auto-lowercasing here
-              // (rather than just validating after the fact) means what's
-              // on screen always matches what actually gets submitted, so
-              // there's never a mismatch between what someone thinks they
-              // typed and what their password actually is.
-              onChangeText={(t) => setPassword(t.toLowerCase())}
+              onChangeText={setPassword}
             />
             <TextInput
               style={[styles.input, { borderColor: colors.border, color: colors.text }]}
@@ -337,7 +333,7 @@ export default function SignupScreen() {
               autoCapitalize="none"
               secureTextEntry
               value={confirmPassword}
-              onChangeText={(t) => setConfirmPassword(t.toLowerCase())}
+              onChangeText={setConfirmPassword}
             />
           </View>
         )}

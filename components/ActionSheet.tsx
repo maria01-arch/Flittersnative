@@ -1,4 +1,6 @@
-import { Modal, View, Text, TouchableOpacity, StyleSheet, Pressable } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Animated, Modal, View, TouchableOpacity, StyleSheet, Pressable } from 'react-native';
+import Text from '@/components/AppText';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/lib/ThemeContext';
 import { spacing } from '@/lib/theme';
@@ -28,11 +30,27 @@ export default function ActionSheet({
   onClose: () => void;
 }) {
   const { colors } = useTheme();
+  // The sheet pops up with a small spring (and the dim fades in) instead of
+  // just fading.
+  const t = useRef(new Animated.Value(0)).current;
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    if (visible) {
+      setShow(true);
+      t.setValue(0);
+      Animated.spring(t, { toValue: 1, useNativeDriver: true, friction: 8, tension: 120 }).start();
+    } else {
+      Animated.timing(t, { toValue: 0, duration: 120, useNativeDriver: true }).start(() => setShow(false));
+    }
+  }, [visible]);
+  if (!show && !visible) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={[styles.sheet, { backgroundColor: colors.card }]} onPress={() => {}}>
+    <Modal visible transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
+      <View style={styles.backdrop}>
+        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)', opacity: t }]} />
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <Animated.View style={[styles.sheet, { backgroundColor: colors.card, transform: [{ translateY: t.interpolate({ inputRange: [0, 1], outputRange: [340, 0] }) }] }]}>
           <View style={styles.handle} />
           {title ? <Text style={[styles.title, { color: colors.subtext }]}>{title}</Text> : null}
           {options.map((opt, i) => (
@@ -51,14 +69,14 @@ export default function ActionSheet({
           <TouchableOpacity style={[styles.cancelBtn, { backgroundColor: colors.inputBg }]} onPress={onClose}>
             <Text style={[styles.cancelText, { color: colors.text }]}>Cancel</Text>
           </TouchableOpacity>
-        </Pressable>
-      </Pressable>
+        </Animated.View>
+      </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  backdrop: { flex: 1, justifyContent: 'flex-end' },
   sheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 34, paddingTop: 8 },
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(150,150,150,0.4)', alignSelf: 'center', marginBottom: 8 },
   title: { textAlign: 'center', fontSize: 13, fontWeight: '600', paddingBottom: 10 },

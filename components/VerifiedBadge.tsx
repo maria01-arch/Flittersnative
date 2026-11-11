@@ -12,7 +12,7 @@ import Svg, { Path, Polyline } from 'react-native-svg';
 // detailed brand mark is a likely place to hit that. At this size the
 // difference is invisible anyway, so this uses simple, guaranteed-supported
 // primitives (Path/Polyline only) for both badges instead.
-export default function VerifiedBadges({ verified, isAuthentic, size = 14 }: { verified?: boolean; isAuthentic?: boolean; size?: number }) {
+export default function VerifiedBadges({ verified, isAuthentic, size = 14, plan }: { verified?: boolean; isAuthentic?: boolean; size?: number; plan?: string | null }) {
   if (!verified && !isAuthentic) return null;
   return (
     <View style={styles.row}>
@@ -36,7 +36,7 @@ export default function VerifiedBadges({ verified, isAuthentic, size = 14 }: { v
         <Svg width={size + 6} height={size + 6} viewBox="0 0 24 24">
           <Path
             d="M12 2L14.4 4.8L18 4L18.8 7.6L22 9.2L20.4 12.6L22 16L18.8 17.6L18 21.2L14.4 20.4L12 23.2L9.6 20.4L6 21.2L5.2 17.6L2 16L3.6 12.6L2 9.2L5.2 7.6L6 4L9.6 4.8Z"
-            fill="#1877F2"
+            fill={plan === 'premium' ? '#F5B301' : '#1877F2'}
           />
           <Polyline points="8,12.5 10.5,15 16,9" fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
         </Svg>
