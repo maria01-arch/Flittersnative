@@ -1,3 +1,4 @@
+import { PlusButton, ActionTray } from '@/components/ComposerActions';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, View, FlatList, TextInput, TouchableOpacity, StyleSheet, Platform, ActivityIndicator, Alert, Keyboard, Image } from 'react-native';
 import Text from '@/components/AppText';
@@ -5,6 +6,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { requestOpenReel } from '@/lib/reelOpen';
+import MentionSuggest from './MentionSuggest';
+import PollCreateSheet from './PollCreateSheet';
+import { pollContent } from '@/lib/polls';
+import { notifyMentions } from '@/lib/postActions';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
@@ -46,6 +51,8 @@ export default function ReelCommentsSheet({
   const { colors } = useTheme();
   const me = session?.user?.id;
   const [comments, setComments] = useState<any[]>([]);
+  const [pollOpen, setPollOpen] = useState(false);
+  const [plusOpen, setPlusOpen] = useState(false);
   const [reelReplies, setReelReplies] = useState<Record<string, any[]>>({});
   const insets = useSafeAreaInsets();
   // The typing box is its own floating bar, separate from the sheet: the sheet
@@ -168,6 +175,7 @@ export default function ReelCommentsSheet({
     if (postId && notifyUserId && notifyUserId !== me) {
       supabase.from('notifications').insert({ user_id: notifyUserId, actor_id: me, type: 'comment', post_id: postId }).then(() => {});
     }
+    if (postId) notifyMentions([content], String(postId), me, notifyUserId ? [notifyUserId] : []).catch(() => {});
     setText('');
     setCommentImage(null);
     setPendingSticker(null);
@@ -184,6 +192,22 @@ export default function ReelCommentsSheet({
     const u = c?.author?.username;
     if (u && c.user_id !== me) setText((t) => (t.startsWith('@') ? t : `@${u} ${t}`));
   };
+  // A poll posted as a comment (or as a reply, when replying to someone).
+  const postPoll = async (pollId: string, question: string) => {
+    if (!me || !reelId) return;
+    const row: any = postId ? { post_id: postId, user_id: me, content: pollContent(question), poll_id: pollId } : { reel_id: reelId, user_id: me, content: pollContent(question), poll_id: pollId };
+    if (replyingTo) row.reply_to_comment_id = replyingTo.reply_to_comment_id || replyingTo.id;
+    const { data, error } = await supabase.from('comments').insert(row).select(SELECT).single();
+    if (error || !data) {
+      Alert.alert("Couldn't post", 'Check your connection and try again.');
+      return;
+    }
+    setComments((prev) => [...prev, ...decorate([data], new Set())]);
+    if (row.reply_to_comment_id) setExpanded((prev) => new Set(prev).add(row.reply_to_comment_id));
+    setReplyingTo(null);
+    onCommentPosted?.();
+  };
+
   // Opens the composer to record or pick a video that is posted as your own reel, linked to this comment.
   const replyWithReel = (c: any) => {
     onClose();
@@ -399,28 +423,19 @@ export default function ReelCommentsSheet({
               </TouchableOpacity>
             </View>
           )}
+          <MentionSuggest text={text} onChange={setText} />
+          <ActionTray
+            open={plusOpen}
+            onClose={() => setPlusOpen(false)}
+            actions={[
+              { key: 'media', icon: 'image-outline', label: 'Photo', onPress: async () => { const u = await pickCommentImage(); if (u) { setCommentImage(u); setPendingSticker(null); } } },
+              { key: 'sticker', icon: 'happy-outline', label: 'Stickers', onPress: () => { Keyboard.dismiss(); setShowTray(true); } },
+              { key: 'poll', icon: 'stats-chart-outline', label: 'Poll', onPress: () => { Keyboard.dismiss(); setPollOpen(true); } },
+            ]}
+          />
+          <PollCreateSheet visible={pollOpen} onClose={() => setPollOpen(false)} onCreated={postPoll} />
           <View style={[styles.inputBar, { paddingBottom: 10 + (kbOpen || showTray ? 0 : insets.bottom) }]}>
-            <TouchableOpacity
-              onPress={async () => {
-                const u = await pickCommentImage();
-                if (u) {
-                  setCommentImage(u);
-                  setPendingSticker(null);
-                }
-              }}
-              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-            >
-              <Ionicons name="image-outline" size={24} color={colors.primary} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => {
-                Keyboard.dismiss();
-                setShowTray((v) => !v);
-              }}
-              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-            >
-              <Ionicons name={showTray ? 'happy' : 'happy-outline'} size={24} color={colors.primary} />
-            </TouchableOpacity>
+            <PlusButton open={plusOpen} onPress={() => setPlusOpen((v) => !v)} size={26} />
             <TextInput
               style={[styles.input, { backgroundColor: colors.inputBg, color: colors.text }]}
               placeholder={commentImage || pendingSticker ? 'Add a caption...' : replyingTo ? 'Write a reply...' : 'Add a comment...'}

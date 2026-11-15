@@ -1,3 +1,6 @@
+import { PlusButton, ActionTray } from '@/components/ComposerActions';
+import { useViewOnce } from '@/lib/viewOnce';
+import ViewOnceViewer from '@/components/ViewOnceViewer';
 import { useEffect, useRef, useState } from 'react';
 import Animated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { supportsReplyId } from '@/lib/replySupport';
@@ -34,7 +37,7 @@ import { spacing } from '@/lib/theme';
 import { lastSeenText } from '@/lib/timeAgo';
 import { LinearGradient } from 'expo-linear-gradient';
 import ChatThemeSheet from '@/components/ChatThemeSheet';
-import { ChatTheme, DEFAULT_THEME, WALLPAPER_PRESETS, BUBBLE_COLORS, loadChatTheme, saveChatTheme, clearChatTheme } from '@/lib/chatTheme';
+import { ChatTheme, DEFAULT_THEME, WALLPAPER_PRESETS, resolveBubble, loadChatTheme, saveChatTheme, clearChatTheme, peekChatTheme } from '@/lib/chatTheme';
 import { isVerifiedUser } from '@/lib/postActions';
 import ImageEditor from '@/components/ImageEditor';
 import JumpToBottom from '@/components/JumpToBottom';
@@ -231,6 +234,9 @@ export default function ConversationScreen() {
   const [imageUri, setImageUri] = useState<string | null>(null);
   const clip = useClipboardImage();
   const [videoUri, setVideoUri] = useState<string | null>(null);
+  const [viewOnceOn, setViewOnceOn] = useState(false);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const [voMsg, setVoMsg] = useState<any>(null);
   const [trimmer, setTrimmer] = useState<{ uri: string; duration: number | null; max: number } | null>(null);
   const [voicePreview, setVoicePreview] = useState<{ uri: string; duration: number; waveform?: string } | null>(null);
   const [otherProfile, setOtherProfile] = useState<any>(null);
@@ -293,7 +299,7 @@ export default function ConversationScreen() {
   // have read receipts on; last seen only when both have it on.
   const [myPrefs, setMyPrefs] = useState<any>(null);
   // Personal chat theme (verified members): wallpaper + own bubble colour.
-  const [chatTheme, setChatTheme] = useState<ChatTheme>(DEFAULT_THEME);
+  const [chatTheme, setChatTheme] = useState<ChatTheme>(() => peekChatTheme(String(id)) || DEFAULT_THEME);
   const [themeOpen, setThemeOpen] = useState(false);
   const [topMenuOpen, setTopMenuOpen] = useState(false);
   const blurRef = useRef<any>(null);
@@ -330,7 +336,8 @@ export default function ConversationScreen() {
     saveChatTheme(String(id), t);
   };
   const wp = chatTheme.wallpaper;
-  const myBubbleColor = chatTheme.bubble !== 'default' ? BUBBLE_COLORS[chatTheme.bubble] : undefined;
+  const bubbleLook = resolveBubble(chatTheme.bubble, colors.primary);
+  const myBubbleColor = bubbleLook.color;
   // Keep the other person's last-seen fresh while this chat is open: re-read
   // their profile every 30 seconds, and the moment they stop being "active".
   useEffect(() => {
@@ -681,7 +688,8 @@ export default function ConversationScreen() {
     playSound('send');
     animateNextChange();
     // If the server's copy already arrived live, drop it so there is one bubble.
-    setMessages((prev) => prev.filter((m) => m.id !== data.id).map((m) => (m.id === tempId ? { ...data, reactions: [] } : m)));
+    // _key keeps the row's identity, so the bubble is not rebuilt (blinks) when it gets its real id.
+    setMessages((prev) => prev.filter((m) => m.id !== data.id).map((m) => (m.id === tempId ? { ...data, reactions: [], _key: m._key || m.id } : m)));
   };
 
   const failOptimistic = (tempId: string) => {
@@ -736,6 +744,7 @@ export default function ConversationScreen() {
     const typed = typeof override === 'string' ? override : text;
     // A picture is waiting: the send button sends it together with the text.
     if (typeof override !== 'string' && imageUri) return sendImage();
+    if (typeof override !== 'string' && videoUri) return sendVideo();
     if (!typed.trim() || !session?.user?.id) return;
     const content = typed.trim();
 
@@ -795,7 +804,9 @@ export default function ConversationScreen() {
     }
   };
 
-  const sendImageMessage = async (localUri: string, tempId: string, caption = '') => {
+  const { opened: voOpened, markOpened: voMark } = useViewOnce(messages, session?.user?.id);
+
+  const sendImageMessage = async (localUri: string, tempId: string, caption = '', reply?: { label: string | null; id: string | null }, viewOnce = false) => {
     const url = await uploadImage(localUri, `messages/${session!.user.id}`);
     if (!url) {
       console.error('[sendImage] upload returned no url');
@@ -805,7 +816,7 @@ export default function ConversationScreen() {
 
     const { data, error } = await supabase
       .from('messages')
-      .insert({ conversation_id: id, sender_id: session!.user.id, content: caption, image_url: url })
+      .insert({ conversation_id: id, sender_id: session!.user.id, content: caption, image_url: url, ...(reply?.label ? { reply_to: reply.label } : {}), ...(replyIdOk && reply?.id ? { reply_to_id: reply.id } : {}), ...(viewOnce ? { view_once: true } : {}) })
       .select()
       .single();
 
@@ -826,16 +837,22 @@ export default function ConversationScreen() {
     const caption = text.trim();
     setText('');
     setImageUri(null);
+    // A picture sent while replying carries the reply, and can be "view once".
+    const replyTo = replyingTo;
+    const reply = replyTo ? { label: replyLabel(replyTo), id: realId(replyTo) } : undefined;
+    const once = viewOnceOn;
+    setReplyingTo(null);
+    setViewOnceOn(false);
     // image_url is set to the local file immediately so the picked photo
     // shows in the bubble at full quality right away — it's swapped for
     // the R2 url once the upload finishes, invisibly to the eye since it's
     // the same picture either way.
-    const temp = makeTempMessage({ content: caption, image_url: localUri });
+    const temp = makeTempMessage({ content: caption, image_url: localUri, ...(reply?.label ? { reply_to: reply.label, reply_to_id: reply.id } : {}), ...(once ? { view_once: true } : {}) });
     addOptimistic(temp);
-    sendImageMessage(localUri, temp.id, caption);
+    sendImageMessage(localUri, temp.id, caption, reply, once);
   };
 
-  const sendVideoMessage = async (localUri: string, tempId: string) => {
+  const sendVideoMessage = async (localUri: string, tempId: string, reply?: { label: string | null; id: string | null }, viewOnce = false, caption = '') => {
     const url = await uploadVideo(localUri, `messages/${session!.user.id}`);
     if (!url) {
       console.error('[sendVideo] upload returned no url');
@@ -844,7 +861,7 @@ export default function ConversationScreen() {
     }
     const { data, error } = await supabase
       .from('messages')
-      .insert({ conversation_id: id, sender_id: session!.user.id, content: '', video_url: url })
+      .insert({ conversation_id: id, sender_id: session!.user.id, content: caption, video_url: url, ...(reply?.label ? { reply_to: reply.label } : {}), ...(replyIdOk && reply?.id ? { reply_to_id: reply.id } : {}), ...(viewOnce ? { view_once: true } : {}) })
       .select()
       .single();
     if (error || !data) {
@@ -859,12 +876,20 @@ export default function ConversationScreen() {
   const sendVideo = () => {
     if (!videoUri || !session?.user?.id) return;
     const localUri = videoUri;
+    // Whatever is typed goes out WITH the video as its caption.
+    const caption = text.trim();
+    setText('');
     setVideoUri(null);
+    const replyTo = replyingTo;
+    const reply = replyTo ? { label: replyLabel(replyTo), id: realId(replyTo) } : undefined;
+    const once = viewOnceOn;
+    setReplyingTo(null);
+    setViewOnceOn(false);
     // Same trick as sendImage: show the local file in the bubble
     // immediately, swap in the uploaded R2 url once it lands.
-    const temp = makeTempMessage({ content: '', video_url: localUri });
+    const temp = makeTempMessage({ content: caption, video_url: localUri, ...(reply?.label ? { reply_to: reply.label, reply_to_id: reply.id } : {}), ...(once ? { view_once: true } : {}) });
     addOptimistic(temp);
-    sendVideoMessage(localUri, temp.id);
+    sendVideoMessage(localUri, temp.id, reply, once, caption);
   };
 
   // Stickers are already-uploaded media (picked from the tray) — no upload
@@ -998,8 +1023,8 @@ export default function ConversationScreen() {
     setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, _pending: true, _failed: false } : x)));
     if (m.is_voice) sendVoiceMessage(m.voice_url, m.voice_duration, m.id);
     else if (m.is_sticker) sendStickerMessage(m.sticker_url, m.id, m.reply_to ? { label: m.reply_to, id: m.reply_to_id || null } : undefined);
-    else if (m.video_url) sendVideoMessage(m.video_url, m.id);
-    else if (m.image_url) sendImageMessage(m.image_url, m.id, m.content || '');
+    else if (m.video_url) sendVideoMessage(m.video_url, m.id, m.reply_to ? { label: m.reply_to, id: m.reply_to_id || null } : undefined, !!m.view_once, m.content || '');
+    else if (m.image_url) sendImageMessage(m.image_url, m.id, m.content || '', m.reply_to ? { label: m.reply_to, id: m.reply_to_id || null } : undefined, !!m.view_once);
     else sendTextMessage(m.content, null, m.id);
   };
 
@@ -1234,7 +1259,7 @@ export default function ConversationScreen() {
         scrollEventThrottle={64}
         onScrollToIndexFailed={(info) => listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true })}
         data={messages}
-        keyExtractor={(item) => item.id?.toString()}
+        keyExtractor={(item) => String(item._key || item.id)}
         inverted
         onEndReached={loadMore}
         onEndReachedThreshold={0.4}
@@ -1275,11 +1300,14 @@ export default function ConversationScreen() {
           return (
             <MessageBubble
               message={item}
+              viewOnceOpened={voOpened.has(String(item.id))}
+              onOpenViewOnce={(m) => { setVoMsg(m); voMark(m.id); }}
               onForward={(m) => setForwardMsg(m)}
               onPressReply={() => jumpToReply(item)}
               onStickerPress={(m) => stickerMenu(m.sticker_url)}
               highlighted={highlightId === item.id}
               myBubbleColor={myBubbleColor}
+              myBubbleGradient={bubbleLook.gradient}
               isMine={item.sender_id === session?.user?.id}
               currentUserId={session?.user?.id}
               isPinned={pinnedIds.has(item.id)}
@@ -1294,7 +1322,7 @@ export default function ConversationScreen() {
               onPin={handlePin}
               onRetry={retryMessage}
               onReport={handleReportMessage}
-              replyThumb={(() => { const o = item.reply_to_id ? messages.find((x) => x.id === item.reply_to_id) : null; return o && o.image_url && !o.is_sticker && !o.is_voice && !o.video_url ? o.image_url : undefined; })()}
+              replyThumb={(() => { const o = item.reply_to_id ? messages.find((x) => x.id === item.reply_to_id) : null; return o && o.image_url && !o.view_once && !o.is_sticker && !o.is_voice && !o.video_url ? o.image_url : undefined; })()}
               replySticker={item.reply_to === STICKER_LABEL && item.reply_to_id ? messages.find((x) => x.id === item.reply_to_id)?.sticker_url : undefined}
             />
           );
@@ -1316,7 +1344,7 @@ export default function ConversationScreen() {
       </View>
       {(replyingTo || editingId) && (
         <View style={[styles.previewBar, { borderTopColor: colors.border, backgroundColor: colors.bubbleTheirs }]}>
-          {!editingId && replyingTo?.image_url && !replyingTo?.is_sticker && !replyingTo?.is_voice && !replyingTo?.video_url ? (
+          {!editingId && replyingTo?.image_url && !replyingTo?.view_once && !replyingTo?.is_sticker && !replyingTo?.is_voice && !replyingTo?.video_url ? (
             <Image source={{ uri: replyingTo.image_url }} style={{ width: 40, height: 40, borderRadius: 8, marginRight: 10 }} resizeMode="cover" />
           ) : null}
           <View style={{ flex: 1 }}>
@@ -1353,6 +1381,10 @@ export default function ConversationScreen() {
               <TouchableOpacity onPress={() => setImageUri(null)} style={styles.imagePreviewRemove}>
                 <Ionicons name="close-circle" size={22} color={colors.subtext} />
               </TouchableOpacity>
+              <TouchableOpacity onPress={() => setViewOnceOn((v) => !v)} style={{ marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: viewOnceOn ? colors.primary : colors.inputBg }}>
+                <Ionicons name="flame" size={15} color={viewOnceOn ? '#fff' : colors.subtext} />
+                <Text style={{ color: viewOnceOn ? '#fff' : colors.subtext, fontWeight: '700', fontSize: 12 }}>View once</Text>
+              </TouchableOpacity>
             </View>
           )}
           {videoUri && (
@@ -1362,6 +1394,10 @@ export default function ConversationScreen() {
               </View>
               <TouchableOpacity onPress={() => setVideoUri(null)} style={styles.imagePreviewRemove}>
                 <Ionicons name="close-circle" size={22} color={colors.subtext} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setViewOnceOn((v) => !v)} style={{ marginLeft: 8, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: viewOnceOn ? colors.primary : colors.inputBg }}>
+                <Ionicons name="flame" size={15} color={viewOnceOn ? '#fff' : colors.subtext} />
+                <Text style={{ color: viewOnceOn ? '#fff' : colors.subtext, fontWeight: '700', fontSize: 12 }}>View once</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={sendVideo} style={[styles.sendImageBtn, { backgroundColor: colors.primary }]}>
                 <Ionicons name="send" size={16} color="#fff" />
@@ -1389,13 +1425,17 @@ export default function ConversationScreen() {
               )}
             </View>
           ) : (
+          <>
+          <ActionTray
+            open={plusOpen}
+            onClose={() => setPlusOpen(false)}
+            actions={[
+              { key: 'media', icon: 'image-outline', label: 'Photo', onPress: pickImage },
+              { key: 'sticker', icon: 'happy-outline', label: 'Stickers', onPress: () => { if (!showStickerTray) Keyboard.dismiss(); setShowStickerTray(true); } },
+            ]}
+          />
           <View style={[styles.inputBar, { borderTopColor: colors.border, backgroundColor: colors.card, paddingBottom: 10 + (Platform.OS === 'ios' && !kbOpen ? insets.bottom : 0) }]}>
-            <TouchableOpacity onPress={pickImage}>
-              <Ionicons name="image-outline" size={26} color={colors.primary} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => { if (!showStickerTray) Keyboard.dismiss(); setShowStickerTray((v) => !v); }}>
-              <Ionicons name={showStickerTray ? 'happy' : 'happy-outline'} size={26} color={colors.primary} />
-            </TouchableOpacity>
+            <PlusButton open={plusOpen} onPress={() => setPlusOpen((v) => !v)} />
             <PasteTextInput
               ref={inputRef}
               onPasteImage={(u) => setImageUri(u)}
@@ -1413,7 +1453,7 @@ export default function ConversationScreen() {
               }}
               multiline
             />
-            {text.trim() || imageUri ? (
+            {text.trim() || imageUri || videoUri ? (
               <TouchableOpacity onPress={() => send()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Ionicons name="send" size={26} color={colors.primary} />
               </TouchableOpacity>
@@ -1423,6 +1463,7 @@ export default function ConversationScreen() {
               </TouchableOpacity>
             )}
           </View>
+          </>
           )}
           {showStickerTray && session?.user?.id && (
             <StickerTray
@@ -1433,7 +1474,7 @@ export default function ConversationScreen() {
               onClose={() => setShowStickerTray(false)}
               onBackspace={() => setText((t) => deleteLast(t))}
               onSend={() => send()}
-              canSend={!!(text.trim() || imageUri)}
+              canSend={!!(text.trim() || imageUri || videoUri)}
               onCancel={() => { setShowStickerTray(false); focusInput(); }}
             />
           )}
@@ -1448,6 +1489,7 @@ export default function ConversationScreen() {
         onCancel={() => setTrimmer(null)}
         onDone={(u) => { setVideoUri(u); setTrimmer(null); }}
       />
+      <ViewOnceViewer message={voMsg} onClose={() => setVoMsg(null)} />
       <ImageEditor visible={editorOpen} uri={imageUri} onCancel={() => setEditorOpen(false)} onDone={(u) => { setImageUri(u); setEditorOpen(false); }} />
       <ChatThemeSheet visible={themeOpen} onClose={() => setThemeOpen(false)} conversationId={String(id)} theme={chatTheme} onChange={changeTheme} verified={meVerified} onReset={async () => { await clearChatTheme(String(id)); setChatTheme(await loadChatTheme(String(id))); }} />
       <ActionSheet

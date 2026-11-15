@@ -1,6 +1,6 @@
 import { cleanMessage } from '@/lib/friendlyError';
-import { useEffect, useState } from 'react';
-import { View, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Modal, TextInput, Alert, Pressable } from 'react-native';
+import { memo, useEffect, useRef, useState } from 'react';
+import { View, TouchableOpacity, StyleSheet, ScrollView, FlatList, ActivityIndicator, Modal, TextInput, Alert, Pressable } from 'react-native';
 import Text from '@/components/AppText';
 import * as ImagePicker from 'expo-image-picker';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -16,6 +16,20 @@ import { qualify } from '@/lib/emojiSplit';
 import StickerMedia from './StickerMedia';
 import ChatPickerSheet from './ChatPickerSheet';
 import { forwardTo } from '@/lib/forward';
+import { MAX_PACKS } from '@/lib/stickerActions';
+
+// What the sticker tab showed last time, kept while the app is open, so opening the tray
+// is instant and the fresh list loads quietly behind it.
+type TrayCache = { packs: { id: string; name: string }[]; activeId: string | null; stickers: Record<string, any[]> };
+const trayCache = new Map<string, TrayCache>();
+
+const EmojiCell = memo(function EmojiCell({ e, onPick }: { e: string; onPick: (e: string) => void }) {
+  return (
+    <TouchableOpacity style={styles.emojiCell} onPress={() => onPick(qualify(e))}>
+      <Emoji emoji={e} size={34} />
+    </TouchableOpacity>
+  );
+});
 
 // Shared by DM (conversation/[id].tsx) and group chat (groups/[id].tsx).
 // Mirrors the webapp's tray: emoji first (universal default), your own
@@ -49,68 +63,96 @@ export default function StickerTray({
   const { colors } = useTheme();
   const [mode, setMode] = useState<'emoji' | 'sticker'>('emoji');
   const [activeCat, setActiveCat] = useState(EMOJI_CATEGORIES[0].id);
-  const [packId, setPackId] = useState<string | null>(null);
-  const [packName, setPackName] = useState('My Stickers');
+  const cached = trayCache.get(userId);
+  const [packs, setPacks] = useState<{ id: string; name: string }[]>(cached?.packs || []);
+  const [packId, setPackId] = useState<string | null>(cached?.activeId || null);
+  const [packName, setPackName] = useState(cached?.packs.find((p) => p.id === cached.activeId)?.name || 'My Stickers');
+  // 'rename' edits the current pack's name; 'new' makes another pack.
+  const [nameMode, setNameMode] = useState<'rename' | 'new'>('rename');
+  const [renameTarget, setRenameTarget] = useState<string | null>(null);
+  const [packMenu, setPackMenu] = useState<{ id: string; name: string } | null>(null);
+  const [stickerMenu, setStickerMenu] = useState<any | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [sendOpen, setSendOpen] = useState(false);
   const [sending, setSending] = useState(false);
-  const [stickers, setStickers] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [stickers, setStickers] = useState<any[]>(cached?.activeId ? cached.stickers[cached.activeId] || [] : []);
+  const [loading, setLoading] = useState(!cached?.activeId);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const remember = (next: Partial<TrayCache>) => {
+    const cur = trayCache.get(userId) || { packs: [], activeId: null, stickers: {} };
+    trayCache.set(userId, { ...cur, ...next, stickers: { ...cur.stickers, ...(next.stickers || {}) } });
+  };
+  const fetchStickers = async (id: string) => {
+    const { data } = await supabase.from('stickers').select('id,media_url').eq('pack_id', id).order('created_at', { ascending: true });
+    return data || [];
+  };
+
+  // Loads my packs (making "My Stickers" the first time) and shows the last one I used.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      setLoading(true);
+      if (!trayCache.get(userId)?.activeId) setLoading(true);
       setError(null);
-      let { data: packs, error: packErr } = await supabase
+      const { data: rows, error: packErr } = await supabase
         .from('sticker_packs')
         .select('id,name')
         .eq('owner_id', userId)
         .order('created_at', { ascending: true });
       if (packErr) {
-        if (!cancelled) {
+        if (!cancelled && !trayCache.get(userId)?.activeId) {
           setError(cleanMessage("Couldn't load your stickers: " + packErr.message) || "Couldn't load your stickers.");
           setLoading(false);
         }
         return;
       }
-      let pack = packs?.[0];
-      if (!pack) {
-        const { data: created, error: createErr } = await supabase
-          .from('sticker_packs')
-          .insert({ owner_id: userId, name: 'My Stickers' })
-          .select('id,name')
-          .single();
-        if (createErr) {
+      let list = (rows || []) as { id: string; name: string }[];
+      if (!list.length) {
+        const { data: created, error: createErr } = await supabase.from('sticker_packs').insert({ owner_id: userId, name: 'My Stickers' }).select('id,name').single();
+        if (createErr || !created) {
           if (!cancelled) {
-            setError(cleanMessage("Couldn't set up your sticker pack: " + createErr.message) || "Couldn't set up your sticker pack.");
+            setError(cleanMessage("Couldn't set up your sticker pack: " + (createErr?.message || '')) || "Couldn't set up your sticker pack.");
             setLoading(false);
           }
           return;
         }
-        pack = created;
+        list = [created as any];
       }
       if (cancelled) return;
-      setPackId(pack.id);
-      setPackName(pack.name || 'My Stickers');
-      const { data: stickerRows } = await supabase
-        .from('stickers')
-        .select('id,media_url')
-        .eq('pack_id', pack.id)
-        .order('created_at', { ascending: true });
-      if (!cancelled) {
-        setStickers(stickerRows || []);
-        setLoading(false);
-      }
+      const keep = trayCache.get(userId)?.activeId;
+      const active = list.find((p) => p.id === keep) || list[0];
+      setPacks(list);
+      setPackId(active.id);
+      setPackName(active.name || 'My Stickers');
+      const rowsNow = await fetchStickers(active.id);
+      if (cancelled) return;
+      setStickers(rowsNow);
+      setLoading(false);
+      remember({ packs: list, activeId: active.id, stickers: { [active.id]: rowsNow } });
     })();
     return () => {
       cancelled = true;
     };
   }, [userId]);
+
+  // Switch to another of my packs.
+  const switchPack = async (p: { id: string; name: string }) => {
+    if (p.id === packId) return;
+    setPackId(p.id);
+    setPackName(p.name || 'My Stickers');
+    setEditMode(false);
+    const hit = trayCache.get(userId)?.stickers[p.id];
+    setStickers(hit || []);
+    remember({ activeId: p.id });
+    const rowsNow = await fetchStickers(p.id);
+    setStickers((cur) => (packIdRef.current === p.id ? rowsNow : cur));
+    remember({ stickers: { [p.id]: rowsNow } });
+  };
+  const packIdRef = useRef<string | null>(packId);
+  packIdRef.current = packId;
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [cropAsk, setCropAsk] = useState<string | null>(null); // picked photo uri waiting for crop choice
@@ -123,7 +165,13 @@ export default function StickerTray({
       .insert({ pack_id: packId, media_url: mediaUrl })
       .select('id,media_url')
       .single();
-    if (inserted) setStickers((prev) => [...prev, inserted]);
+    if (inserted) {
+      setStickers((prev) => {
+        const next = [...prev, inserted];
+        if (packId) remember({ stickers: { [packId]: next } });
+        return next;
+      });
+    }
     else setError(cleanMessage("Couldn't save sticker: " + (insertErr?.message || '')) || "Couldn't save sticker.");
   };
 
@@ -180,7 +228,11 @@ export default function StickerTray({
             Alert.alert("Couldn't delete", delErr?.message || 'The database did not allow it.');
             return;
           }
-          setStickers((prev) => prev.filter((x) => x.id !== st.id));
+          setStickers((prev) => {
+            const next = prev.filter((x) => x.id !== st.id);
+            if (packId) remember({ stickers: { [packId]: next } });
+            return next;
+          });
         },
       },
     ]);
@@ -188,14 +240,72 @@ export default function StickerTray({
 
   const saveName = async () => {
     const name = nameDraft.trim().slice(0, 30);
-    if (!name || !packId) return;
-    const { data, error: upErr } = await supabase.from('sticker_packs').update({ name }).eq('id', packId).eq('owner_id', userId).select('id');
+    if (!name) return;
+    if (nameMode === 'new') {
+      if (packs.length >= MAX_PACKS) {
+        setRenameOpen(false);
+        return Alert.alert('Pack limit', `You can have up to ${MAX_PACKS} sticker packs.`);
+      }
+      const { data: made, error: mkErr } = await supabase.from('sticker_packs').insert({ owner_id: userId, name }).select('id,name').single();
+      setRenameOpen(false);
+      if (mkErr || !made) return Alert.alert("Couldn't make the pack", cleanMessage(mkErr?.message || '') || 'Please try again.');
+      const list = [...packs, made as any];
+      setPacks(list);
+      remember({ packs: list, stickers: { [(made as any).id]: [] } });
+      switchPack(made as any);
+      return;
+    }
+    const target = renameTarget || packId;
+    if (!target) return;
+    const { data, error: upErr } = await supabase.from('sticker_packs').update({ name }).eq('id', target).eq('owner_id', userId).select('id');
     if (upErr || !data?.length) {
       Alert.alert("Couldn't rename", upErr?.message || 'The database did not allow it.');
     } else {
-      setPackName(name);
+      const list = packs.map((p) => (p.id === target ? { ...p, name } : p));
+      setPacks(list);
+      remember({ packs: list });
+      if (target === packId) setPackName(name);
     }
     setRenameOpen(false);
+  };
+
+  // Delete a whole pack (its stickers go with it). At least one pack always stays.
+  const deletePack = (p: { id: string; name: string }) => {
+    if (packs.length <= 1) return Alert.alert('Keep one pack', 'You need at least one sticker pack.');
+    Alert.alert(`Delete "${p.name}"?`, 'All stickers in this pack are removed from your stickers. Chats that already have them are not affected.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete pack',
+        style: 'destructive',
+        onPress: async () => {
+          await supabase.from('stickers').delete().eq('pack_id', p.id);
+          const { data, error: delErr } = await supabase.from('sticker_packs').delete().eq('id', p.id).eq('owner_id', userId).select('id');
+          if (delErr || !data?.length) return Alert.alert("Couldn't delete the pack", delErr?.message || 'The database did not allow it.');
+          const list = packs.filter((x) => x.id !== p.id);
+          setPacks(list);
+          remember({ packs: list });
+          if (p.id === packId) switchPack(list[0]);
+        },
+      },
+    ]);
+  };
+
+  // Move one sticker into another of my packs.
+  const moveSticker = async (st: any, to: { id: string; name: string }) => {
+    const { data, error: mvErr } = await supabase.from('stickers').update({ pack_id: to.id }).eq('id', st.id).select('id');
+    if (mvErr || !data?.length) {
+      // Fall back to copy + delete when the database does not allow moving.
+      const { error: insErr } = await supabase.from('stickers').insert({ pack_id: to.id, media_url: st.media_url });
+      if (insErr) return Alert.alert("Couldn't move it", cleanMessage(insErr.message) || 'Please try again.');
+      await supabase.from('stickers').delete().eq('id', st.id);
+    }
+    setStickers((prev) => {
+      const next = prev.filter((x) => x.id !== st.id);
+      if (packId) remember({ stickers: { [packId]: next } });
+      return next;
+    });
+    const dest = trayCache.get(userId)?.stickers[to.id];
+    if (dest) remember({ stickers: { [to.id]: [...dest, st] } });
   };
 
   const sendPack = async (targets: any[]) => {
@@ -245,13 +355,19 @@ export default function StickerTray({
               </TouchableOpacity>
             ))}
           </ScrollView>
-          <ScrollView contentContainerStyle={[styles.emojiGrid, (onBackspace || onSend || onCancel) && { paddingBottom: 120 }]}>
-            {cat.emojis.map((e, i) => (
-              <TouchableOpacity key={cat.id + i} style={styles.emojiCell} onPress={() => onSelectEmoji(qualify(e))}>
-                <Emoji emoji={e} size={34} />
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          <FlatList
+            key={cat.id}
+            data={cat.emojis}
+            numColumns={7}
+            keyExtractor={(e, i) => cat.id + i}
+            renderItem={({ item: e }) => <EmojiCell e={e} onPick={onSelectEmoji} />}
+            initialNumToRender={42}
+            maxToRenderPerBatch={28}
+            windowSize={5}
+            removeClippedSubviews
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={[styles.emojiGrid, (onBackspace || onSend || onCancel) && { paddingBottom: 120 }]}
+          />
         </>
       ) : (
         <ScrollView contentContainerStyle={styles.stickerGrid}>
@@ -261,8 +377,33 @@ export default function StickerTray({
             <ActivityIndicator color={colors.primary} style={{ marginTop: 30 }} />
           ) : (
             <>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ width: '100%', flexGrow: 0 }} contentContainerStyle={{ gap: 8, paddingBottom: 6 }} keyboardShouldPersistTaps="handled">
+                {packs.map((p) => (
+                  <TouchableOpacity
+                    key={p.id}
+                    onPress={() => switchPack(p)}
+                    onLongPress={() => setPackMenu(p)}
+                    delayLongPress={250}
+                    style={[styles.chip, { backgroundColor: p.id === packId ? colors.primary : colors.inputBg }]}
+                  >
+                    <Text style={{ color: p.id === packId ? '#fff' : colors.subtext, fontWeight: '700', fontSize: 12 }} numberOfLines={1}>{p.name || 'My Stickers'}</Text>
+                  </TouchableOpacity>
+                ))}
+                <TouchableOpacity
+                  onPress={() => {
+                    if (packs.length >= MAX_PACKS) return Alert.alert('Pack limit', `You can have up to ${MAX_PACKS} sticker packs.`);
+                    setNameMode('new');
+                    setNameDraft('');
+                    setRenameOpen(true);
+                  }}
+                  style={[styles.chip, { backgroundColor: colors.primary + '26', flexDirection: 'row', alignItems: 'center', gap: 4 }]}
+                >
+                  <Ionicons name="add" size={14} color={colors.primary} />
+                  <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 12 }}>New pack</Text>
+                </TouchableOpacity>
+              </ScrollView>
               <View style={styles.packHead}>
-                <TouchableOpacity style={{ flex: 1 }} onPress={() => { setNameDraft(packName); setRenameOpen(true); }} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                <TouchableOpacity style={{ flex: 1 }} onPress={() => { setNameMode('rename'); setRenameTarget(null); setNameDraft(packName); setRenameOpen(true); }} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
                   <Text style={{ color: colors.text, fontWeight: '800', fontSize: 14 }} numberOfLines={1}>
                     {packName} <Ionicons name="pencil" size={12} color={colors.faint} />
                   </Text>
@@ -281,7 +422,7 @@ export default function StickerTray({
                 {uploading ? <ActivityIndicator color={colors.subtext} /> : <Ionicons name="add" size={28} color={colors.faint} />}
               </TouchableOpacity>
               {stickers.map((s) => (
-                <TouchableOpacity key={s.id} style={[styles.stickerTile, { backgroundColor: colors.inputBg }]} onPress={() => (editMode ? deleteSticker(s) : onSelectSticker(s.media_url))}>
+                <TouchableOpacity key={s.id} style={[styles.stickerTile, { backgroundColor: colors.inputBg }]} onPress={() => (editMode ? deleteSticker(s) : onSelectSticker(s.media_url))} onLongPress={() => !editMode && setStickerMenu(s)} delayLongPress={300}>
                   <StickerMedia url={s.media_url} size={68} />
                   {editMode && (
                     <View style={styles.delBadge}>
@@ -325,13 +466,13 @@ export default function StickerTray({
       <Modal visible={renameOpen} transparent animationType="fade" onRequestClose={() => setRenameOpen(false)}>
         <Pressable style={styles.modalBack} onPress={() => setRenameOpen(false)}>
           <Pressable style={[styles.modalCard, { backgroundColor: colors.card }]} onPress={() => {}}>
-            <Text style={{ color: colors.text, fontSize: 17, fontWeight: '800', marginBottom: 10 }}>Name your sticker pack</Text>
+            <Text style={{ color: colors.text, fontSize: 17, fontWeight: '800', marginBottom: 10 }}>{nameMode === 'new' ? 'New sticker pack' : 'Name your sticker pack'}</Text>
             <TextInput
               value={nameDraft}
               onChangeText={setNameDraft}
               maxLength={30}
               autoFocus
-              placeholder="My Stickers"
+              placeholder={nameMode === 'new' ? 'Pack name' : 'My Stickers'}
               placeholderTextColor={colors.faint}
               style={{ backgroundColor: colors.inputBg, color: colors.text, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11, fontSize: 16 }}
             />
@@ -346,6 +487,24 @@ export default function StickerTray({
           </Pressable>
         </Pressable>
       </Modal>
+      <ActionSheet
+        visible={!!packMenu && !renameOpen}
+        title={packMenu?.name || 'Pack'}
+        onClose={() => setPackMenu(null)}
+        options={[
+          { label: 'Rename', icon: 'pencil-outline', onPress: () => { const m = packMenu; setNameMode('rename'); setRenameTarget(m?.id || null); setNameDraft(m?.name || ''); setTimeout(() => setRenameOpen(true), 250); } },
+          { label: 'Delete pack', icon: 'trash-outline', destructive: true, onPress: () => { const m = packMenu; setPackMenu(null); if (m) setTimeout(() => deletePack(m), 250); } },
+        ]}
+      />
+      <ActionSheet
+        visible={!!stickerMenu}
+        title="Sticker"
+        onClose={() => setStickerMenu(null)}
+        options={[
+          ...packs.filter((p) => p.id !== packId).map((p) => ({ label: `Move to "${p.name || 'My Stickers'}"`, icon: 'albums-outline' as const, onPress: () => { const st = stickerMenu; setStickerMenu(null); if (st) moveSticker(st, p); } })),
+          { label: 'Delete sticker', icon: 'trash-outline', destructive: true, onPress: () => { const st = stickerMenu; setStickerMenu(null); if (st) setTimeout(() => deleteSticker(st), 250); } },
+        ]}
+      />
       <ChatPickerSheet visible={sendOpen} userId={userId} title="Send sticker pack to" busy={sending} onClose={() => setSendOpen(false)} onSend={sendPack} />
       <StickerVideoTrim visible={!!video} uri={video?.uri || null} duration={video?.duration || 5} onCancel={() => setVideo(null)} onDone={finishVideo} />
       {mode === 'emoji' && (onBackspace || onSend || onCancel) ? (
@@ -378,6 +537,7 @@ const styles = StyleSheet.create({
   tabRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 8, gap: 8, borderBottomWidth: 1 },
   tab: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14 },
   tabText: { fontSize: 12, fontWeight: '700' },
+  chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14, maxWidth: 140 },
   closeBtn: { marginLeft: 'auto', padding: 4 },
   catRow: { flexGrow: 0, paddingHorizontal: 6, paddingVertical: 6, borderBottomWidth: 1 },
   catBtn: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginHorizontal: 2 },

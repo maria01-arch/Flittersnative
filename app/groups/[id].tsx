@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { PlusButton, ActionTray } from '@/components/ComposerActions';
+import { useViewOnce } from '@/lib/viewOnce';
+import ViewOnceViewer from '@/components/ViewOnceViewer';
+import PollCreateSheet from '@/components/PollCreateSheet';
+import JoinRequestsBanner from '@/components/JoinRequestsBanner';
+import { pollContent } from '@/lib/polls';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Animated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { supportsReplyId } from '@/lib/replySupport';
 import Avatar from '@/components/Avatar';
@@ -11,7 +17,7 @@ import { getClearedAt, clearHistoryUpTo, isAfterCleared } from '@/lib/clearHisto
 import { addStickerToMyPack, StickerResult } from '@/lib/stickerActions';
 import { StickerPackSheet } from '@/components/StickerPackCard';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChatTheme, DEFAULT_THEME, WALLPAPER_PRESETS, BUBBLE_COLORS, loadChatTheme, saveChatTheme, clearChatTheme } from '@/lib/chatTheme';
+import { ChatTheme, DEFAULT_THEME, WALLPAPER_PRESETS, resolveBubble, loadChatTheme, saveChatTheme, clearChatTheme, peekChatTheme } from '@/lib/chatTheme';
 import ChatThemeSheet from '@/components/ChatThemeSheet';
 import PinnedBar from '@/components/PinnedBar';
 import PeopleListSheet, { PersonRow } from '@/components/PeopleListSheet';
@@ -26,7 +32,7 @@ import PasteTextInput from '@/components/PasteTextInput';
 import { useClipboardImage } from '@/lib/clipboardImage';
 import PasteImageChip from '@/components/PasteImageChip';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLocalSearchParams, router } from 'expo-router';
+import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
@@ -162,7 +168,7 @@ export default function GroupChatScreen() {
   }, [id, session?.user?.id]);
   const isGroupAdmin = myRole === 'admin' || (!!groupInfo?.creator_id && groupInfo.creator_id === session?.user?.id);
   // The theme chosen in Settings (wallpaper + own bubble colour) applies to groups too.
-  const [chatTheme, setChatTheme] = useState<ChatTheme>(DEFAULT_THEME);
+  const [chatTheme, setChatTheme] = useState<ChatTheme>(() => peekChatTheme('group_' + String(id)) || DEFAULT_THEME);
   useEffect(() => {
     loadChatTheme('group_' + String(id)).then(setChatTheme);
   }, [id]);
@@ -180,7 +186,8 @@ export default function GroupChatScreen() {
     saveChatTheme('group_' + String(id), t);
   };
   const wp = chatTheme.wallpaper;
-  const myBubbleColor = chatTheme.bubble !== 'default' ? BUBBLE_COLORS[chatTheme.bubble] : undefined;
+  const bubbleLook = resolveBubble(chatTheme.bubble, colors.primary);
+  const myBubbleColor = bubbleLook.color;
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [replyIdOk, setReplyIdOk] = useState(false);
   useEffect(() => {
@@ -271,6 +278,9 @@ export default function GroupChatScreen() {
   const [imageUri, setImageUri] = useState<string | null>(null);
   const clip = useClipboardImage();
   const [videoUri, setVideoUri] = useState<string | null>(null);
+  const [viewOnceOn, setViewOnceOn] = useState(false);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const [voMsg, setVoMsg] = useState<any>(null);
   const [trimmer, setTrimmer] = useState<{ uri: string; duration: number | null; max: number } | null>(null);
   const [voicePreview, setVoicePreview] = useState<{ uri: string; duration: number; waveform?: string } | null>(null);
   const [showStickerTray, setShowStickerTray] = useState(false);
@@ -609,7 +619,8 @@ export default function GroupChatScreen() {
     playSound('send');
     animateNextChange();
     const withAuthor = { ...data, author: myProfileRef.current };
-    setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...withAuthor, reactions: [] } : m)));
+    // _key keeps the row's identity, so the bubble is not rebuilt (blinks) when it gets its real id.
+    setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...withAuthor, reactions: [], _key: m._key || m.id } : m)));
     return withAuthor;
   };
 
@@ -650,6 +661,7 @@ export default function GroupChatScreen() {
   const send = async () => {
     // A picture is waiting: the send button sends it together with the text.
     if (imageUri) return sendImage();
+    if (videoUri) return sendVideo();
     if (!text.trim() || !session?.user?.id) return;
     const content = text.trim();
     if (mentionQuery !== null) closeMention();
@@ -708,7 +720,46 @@ export default function GroupChatScreen() {
     }
   };
 
-  const sendImageMessage = async (localUri: string, tempId: string, caption = '') => {
+  const { opened: voOpened, markOpened: voMark } = useViewOnce(messages, session?.user?.id);
+
+  // ---- Polls: a poll is a message that points at a poll (poll_id).
+  const [pollOpen, setPollOpen] = useState(false);
+  const sendPoll = async (pollId: string, question: string) => {
+    if (!session?.user?.id) return;
+    const content = pollContent(question);
+    const temp = makeTempMessage({ content, poll_id: pollId });
+    addOptimistic(temp);
+    const { data, error } = await supabase
+      .from('group_messages')
+      .insert({ group_id: id, sender_id: session.user.id, content, poll_id: pollId })
+      .select()
+      .single();
+    if (error || !data) {
+      console.error('[sendPoll] insert failed:', error?.message, error);
+      failOptimistic(temp.id);
+      return;
+    }
+    const withAuthor = resolveOptimistic(temp.id, data);
+    channelRef.current?.send({ type: 'broadcast', event: 'new_message', payload: withAuthor });
+  };
+
+  // ---- Admins: how many people are waiting to join (banner at the top).
+  const [joinCount, setJoinCount] = useState(0);
+  const [joinDismissed, setJoinDismissed] = useState(0);
+  const loadJoinCount = useCallback(async () => {
+    if (!isGroupAdmin || !id) return;
+    const { count, error } = await supabase.from('group_join_requests').select('id', { count: 'exact', head: true }).eq('group_id', id).eq('status', 'pending');
+    if (!error && typeof count === 'number') setJoinCount(count);
+  }, [isGroupAdmin, id]);
+  useFocusEffect(
+    useCallback(() => {
+      loadJoinCount();
+      const t = setInterval(loadJoinCount, 30000);
+      return () => clearInterval(t);
+    }, [loadJoinCount])
+  );
+
+  const sendImageMessage = async (localUri: string, tempId: string, caption = '', reply?: { label: string | null; id: string | null }, viewOnce = false) => {
     const url = await uploadImage(localUri, `messages/${session!.user.id}`);
     if (!url) {
       console.error('[sendImage] upload returned no url');
@@ -718,7 +769,7 @@ export default function GroupChatScreen() {
 
     const { data, error } = await supabase
       .from('group_messages')
-      .insert({ group_id: id, sender_id: session!.user.id, content: caption, image_url: url })
+      .insert({ group_id: id, sender_id: session!.user.id, content: caption, image_url: url, ...(reply?.label ? { reply_to: reply.label } : {}), ...(replyIdOk && reply?.id ? { reply_to_id: reply.id } : {}), ...(viewOnce ? { view_once: true } : {}) })
       .select()
       .single();
 
@@ -739,12 +790,18 @@ export default function GroupChatScreen() {
     const caption = text.trim();
     setText('');
     setImageUri(null);
-    const temp = makeTempMessage({ content: caption, image_url: localUri });
+    // A picture sent while replying carries the reply, and can be "view once".
+    const replyTo = replyingTo;
+    const reply = replyTo ? { label: replyLabel(replyTo), id: realId(replyTo) } : undefined;
+    const once = viewOnceOn;
+    setReplyingTo(null);
+    setViewOnceOn(false);
+    const temp = makeTempMessage({ content: caption, image_url: localUri, ...(reply?.label ? { reply_to: reply.label, reply_to_id: reply.id } : {}), ...(once ? { view_once: true } : {}) });
     addOptimistic(temp);
-    sendImageMessage(localUri, temp.id, caption);
+    sendImageMessage(localUri, temp.id, caption, reply, once);
   };
 
-  const sendVideoMessage = async (localUri: string, tempId: string) => {
+  const sendVideoMessage = async (localUri: string, tempId: string, reply?: { label: string | null; id: string | null }, viewOnce = false, caption = '') => {
     const url = await uploadVideo(localUri, `messages/${session!.user.id}`);
     if (!url) {
       console.error('[sendVideo] upload returned no url');
@@ -753,7 +810,7 @@ export default function GroupChatScreen() {
     }
     const { data, error } = await supabase
       .from('group_messages')
-      .insert({ group_id: id, sender_id: session!.user.id, content: '', video_url: url })
+      .insert({ group_id: id, sender_id: session!.user.id, content: caption, video_url: url, ...(reply?.label ? { reply_to: reply.label } : {}), ...(replyIdOk && reply?.id ? { reply_to_id: reply.id } : {}), ...(viewOnce ? { view_once: true } : {}) })
       .select()
       .single();
     if (error || !data) {
@@ -768,10 +825,18 @@ export default function GroupChatScreen() {
   const sendVideo = () => {
     if (!videoUri || !session?.user?.id) return;
     const localUri = videoUri;
+    // Whatever is typed goes out WITH the video as its caption.
+    const caption = text.trim();
+    setText('');
     setVideoUri(null);
-    const temp = makeTempMessage({ content: '', video_url: localUri });
+    const replyTo = replyingTo;
+    const reply = replyTo ? { label: replyLabel(replyTo), id: realId(replyTo) } : undefined;
+    const once = viewOnceOn;
+    setReplyingTo(null);
+    setViewOnceOn(false);
+    const temp = makeTempMessage({ content: caption, video_url: localUri, ...(reply?.label ? { reply_to: reply.label, reply_to_id: reply.id } : {}), ...(once ? { view_once: true } : {}) });
     addOptimistic(temp);
-    sendVideoMessage(localUri, temp.id);
+    sendVideoMessage(localUri, temp.id, reply, once, caption);
   };
 
   const sendStickerMessage = async (stickerUrl: string, tempId: string, reply?: { label: string | null; id: string | null }) => {
@@ -898,8 +963,8 @@ export default function GroupChatScreen() {
     setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, _pending: true, _failed: false } : x)));
     if (m.is_voice) sendVoiceMessage(m.voice_url, m.voice_duration, m.id);
     else if (m.is_sticker) sendStickerMessage(m.sticker_url, m.id, m.reply_to ? { label: m.reply_to, id: m.reply_to_id || null } : undefined);
-    else if (m.video_url) sendVideoMessage(m.video_url, m.id);
-    else if (m.image_url) sendImageMessage(m.image_url, m.id);
+    else if (m.video_url) sendVideoMessage(m.video_url, m.id, m.reply_to ? { label: m.reply_to, id: m.reply_to_id || null } : undefined, !!m.view_once, m.content || '');
+    else if (m.image_url) sendImageMessage(m.image_url, m.id, m.content || '', m.reply_to ? { label: m.reply_to, id: m.reply_to_id || null } : undefined, !!m.view_once);
     else sendTextMessage(m.content, null, m.id);
   };
 
@@ -1218,7 +1283,19 @@ export default function GroupChatScreen() {
         ]}
       />
 
-      {pinItems.length > 0 && <PinnedBar items={pinItems} onJump={scrollToId} />}
+      {(pinItems.length > 0 || (isGroupAdmin && joinCount > joinDismissed)) && (
+        <View>
+          {pinItems.length > 0 && <PinnedBar items={pinItems} onJump={scrollToId} />}
+          {isGroupAdmin && joinCount > joinDismissed && (
+            <JoinRequestsBanner
+              count={joinCount}
+              overlay={pinItems.length > 0}
+              onOpen={() => router.push({ pathname: '/groups/settings', params: { id } })}
+              onDismiss={() => setJoinDismissed(joinCount)}
+            />
+          )}
+        </View>
+      )}
 
       {/* The list is inverted (flipped upside down internally so the newest message
           sits at the bottom). Anything drawn INSIDE it comes out flipped too, which is
@@ -1241,7 +1318,7 @@ export default function GroupChatScreen() {
         scrollEventThrottle={64}
         onScrollToIndexFailed={(info) => listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true })}
         data={messages}
-        keyExtractor={(item) => item.id?.toString()}
+        keyExtractor={(item) => String(item._key || item.id)}
         inverted
         onEndReached={loadMore}
         onEndReachedThreshold={0.4}
@@ -1259,8 +1336,11 @@ export default function GroupChatScreen() {
           return (
             <MessageBubble
               message={item}
+              viewOnceOpened={voOpened.has(String(item.id))}
+              onOpenViewOnce={(m) => { setVoMsg(m); voMark(m.id); }}
               onForward={(m) => setForwardMsg(m)}
               myBubbleColor={myBubbleColor}
+              myBubbleGradient={bubbleLook.gradient}
               onPressReply={() => jumpToReply(item)}
               onStickerPress={(m) => stickerMenu(m.sticker_url)}
               highlighted={highlightId === item.id}
@@ -1285,7 +1365,7 @@ export default function GroupChatScreen() {
               onShowReactors={showReactors}
               onShowSeenBy={showSeenBy}
               replyHeader={(() => { if (!item.reply_to_id) return undefined; const o = messages.find((x) => x.id === item.reply_to_id); if (!o) return undefined; const meId = session?.user?.id; if (o.sender_id === meId) return item.sender_id === meId ? undefined : 'replied to you'; const nm = (o.author?.display_name || '').split(' ')[0]; if (!nm) return undefined; return item.sender_id === meId ? `You replied to ${nm}` : `replied to ${nm}`; })()}
-              replyThumb={(() => { const o = item.reply_to_id ? messages.find((x) => x.id === item.reply_to_id) : null; return o && o.image_url && !o.is_sticker && !o.is_voice && !o.video_url ? o.image_url : undefined; })()}
+              replyThumb={(() => { const o = item.reply_to_id ? messages.find((x) => x.id === item.reply_to_id) : null; return o && o.image_url && !o.view_once && !o.is_sticker && !o.is_voice && !o.video_url ? o.image_url : undefined; })()}
               replySticker={item.reply_to === STICKER_LABEL && item.reply_to_id ? messages.find((x) => x.id === item.reply_to_id)?.sticker_url : undefined}
             />
           );
@@ -1299,7 +1379,7 @@ export default function GroupChatScreen() {
       </View>
       {(replyingTo || editingId) && (
         <View style={[styles.previewBar, { borderTopColor: colors.border, backgroundColor: colors.bubbleTheirs }]}>
-          {!editingId && replyingTo?.image_url && !replyingTo?.is_sticker && !replyingTo?.is_voice && !replyingTo?.video_url ? (
+          {!editingId && replyingTo?.image_url && !replyingTo?.view_once && !replyingTo?.is_sticker && !replyingTo?.is_voice && !replyingTo?.video_url ? (
             <Image source={{ uri: replyingTo.image_url }} style={{ width: 40, height: 40, borderRadius: 8, marginRight: 10 }} resizeMode="cover" />
           ) : null}
           <View style={{ flex: 1 }}>
@@ -1365,6 +1445,10 @@ export default function GroupChatScreen() {
               <TouchableOpacity onPress={() => setImageUri(null)} style={styles.imagePreviewRemove}>
                 <Ionicons name="close-circle" size={22} color={colors.subtext} />
               </TouchableOpacity>
+              <TouchableOpacity onPress={() => setViewOnceOn((v) => !v)} style={{ marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: viewOnceOn ? colors.primary : colors.inputBg }}>
+                <Ionicons name="flame" size={15} color={viewOnceOn ? '#fff' : colors.subtext} />
+                <Text style={{ color: viewOnceOn ? '#fff' : colors.subtext, fontWeight: '700', fontSize: 12 }}>View once</Text>
+              </TouchableOpacity>
             </View>
           )}
           {videoUri && (
@@ -1374,6 +1458,10 @@ export default function GroupChatScreen() {
               </View>
               <TouchableOpacity onPress={() => setVideoUri(null)} style={styles.imagePreviewRemove}>
                 <Ionicons name="close-circle" size={22} color={colors.subtext} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setViewOnceOn((v) => !v)} style={{ marginLeft: 8, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: viewOnceOn ? colors.primary : colors.inputBg }}>
+                <Ionicons name="flame" size={15} color={viewOnceOn ? '#fff' : colors.subtext} />
+                <Text style={{ color: viewOnceOn ? '#fff' : colors.subtext, fontWeight: '700', fontSize: 12 }}>View once</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={sendVideo} style={[styles.sendImageBtn, { backgroundColor: colors.primary }]}>
                 <Ionicons name="send" size={16} color="#fff" />
@@ -1389,13 +1477,17 @@ export default function GroupChatScreen() {
               onDismiss={clip.dismiss}
             />
           )}
+          <ActionTray
+            open={plusOpen}
+            onClose={() => setPlusOpen(false)}
+            actions={[
+              { key: 'media', icon: 'image-outline', label: 'Photo', onPress: pickImage },
+              { key: 'sticker', icon: 'happy-outline', label: 'Stickers', onPress: () => { if (!showStickerTray) Keyboard.dismiss(); setShowStickerTray(true); } },
+              { key: 'poll', icon: 'stats-chart-outline', label: 'Poll', onPress: () => { Keyboard.dismiss(); setPollOpen(true); } },
+            ]}
+          />
           <View style={[styles.inputBar, { borderTopColor: colors.border, backgroundColor: colors.card, paddingBottom: 10 + (Platform.OS === 'ios' && !kbOpen ? insets.bottom : 0) }]}>
-            <TouchableOpacity onPress={pickImage}>
-              <Ionicons name="image-outline" size={26} color={colors.primary} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => { if (!showStickerTray) Keyboard.dismiss(); setShowStickerTray((v) => !v); }}>
-              <Ionicons name={showStickerTray ? 'happy' : 'happy-outline'} size={26} color={colors.primary} />
-            </TouchableOpacity>
+            <PlusButton open={plusOpen} onPress={() => setPlusOpen((v) => !v)} />
             <PasteTextInput
               ref={inputRef}
               onPasteImage={(u) => setImageUri(u)}
@@ -1409,7 +1501,7 @@ export default function GroupChatScreen() {
               value={text}
               onChangeText={onTextChange}
             />
-            {text.trim() || imageUri ? (
+            {text.trim() || imageUri || videoUri ? (
               <TouchableOpacity onPress={send} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Ionicons name="send" size={26} color={colors.primary} />
               </TouchableOpacity>
@@ -1428,7 +1520,7 @@ export default function GroupChatScreen() {
               onClose={() => setShowStickerTray(false)}
               onBackspace={() => setText((t) => deleteLast(t))}
               onSend={() => send()}
-              canSend={!!(text.trim() || imageUri)}
+              canSend={!!(text.trim() || imageUri || videoUri)}
               onCancel={() => { setShowStickerTray(false); focusInput(); }}
             />
           )}
@@ -1465,6 +1557,8 @@ export default function GroupChatScreen() {
         onCancel={() => setTrimmer(null)}
         onDone={(u) => { setVideoUri(u); setTrimmer(null); }}
       />
+      <ViewOnceViewer message={voMsg} onClose={() => setVoMsg(null)} />
+      <PollCreateSheet visible={pollOpen} onClose={() => setPollOpen(false)} onCreated={sendPoll} />
       <ImageEditor visible={editorOpen} uri={imageUri} onCancel={() => setEditorOpen(false)} onDone={(u) => { setImageUri(u); setEditorOpen(false); }} />
       <ActionSheet
         visible={!!stickerSheetUrl}

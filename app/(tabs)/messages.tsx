@@ -11,6 +11,8 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
 import { useOnlinePresence } from '@/lib/usePresence';
+import { useOnline } from '@/lib/useOnline';
+import { warmChatThemes } from '@/lib/chatTheme';
 import { useInbox } from '@/lib/InboxContext';
 import { useUnread } from '@/lib/UnreadContext';
 import { useAppForeground } from '@/lib/useAppForeground';
@@ -30,7 +32,7 @@ function previewText(msg: any, me?: string): string | null {
   if (parseMomentReply(msg.reply_to)) return momentPreview(!!me && msg.sender_id === me, msg.content);
   if (msg.is_voice) return '🎤 Voice message';
   if (msg.is_sticker) return '🖼️ Sticker';
-  if (msg.video_url) return '🎥 Video';
+  if (msg.video_url) return msg.content ? `🎥 ${msg.content}` : '🎥 Video';
   if (msg.image_url) return msg.content ? `📷 ${msg.content}` : '📷 Photo';
   return msg.content || null;
 }
@@ -42,6 +44,8 @@ export default function ChatsScreen() {
   const [joinText, setJoinText] = useState('');
   const [chats, setChats] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const online = useOnline();
   const [menuOpen, setMenuOpen] = useState(false);
   const onlineIds = useOnlinePresence(session?.user?.id);
   const { version, subscribeEvents } = useInbox();
@@ -71,10 +75,13 @@ export default function ChatsScreen() {
       const myId = session?.user?.id;
       if (!myId) return;
 
-      const [{ data: myParts }, { data: myGroups }] = await Promise.all([
+      const [{ data: myParts, error: partsErr }, { data: myGroups, error: groupsErr }] = await Promise.all([
         supabase.from('conversation_participants').select('*').eq('user_id', myId),
         supabase.from('group_members').select('*').eq('user_id', myId),
       ]);
+      // A weak connection answers with an error, not an empty list. Treating that as
+      // "no chats" wiped the list (and the saved copy), so stop here and keep what is shown.
+      if (partsErr || groupsErr) throw new Error('chat list unavailable: ' + (partsErr?.message || groupsErr?.message));
       const convIds = (myParts || []).map((p: any) => p.conversation_id);
       const groupIds = (myGroups || []).map((g: any) => g.group_id);
 
@@ -89,6 +96,7 @@ export default function ChatsScreen() {
           supabase.from('conversation_participants').select('conversation_id,user_id').in('conversation_id', convIds).neq('user_id', myId),
           supabase.from('messages').select(MSG_COLS).in('conversation_id', convIds).order('created_at', { ascending: false }).limit(200),
         ]);
+        if ((partsRes as any).error || (msgsRes as any).error) throw new Error('chat list unavailable');
         const unreadByConv: Record<string, number> = {};
         ((unreadRes as any).data || []).forEach((m: any) => (unreadByConv[m.conversation_id] = (unreadByConv[m.conversation_id] || 0) + 1));
         const otherParts = (partsRes as any).data || [];
@@ -111,6 +119,7 @@ export default function ChatsScreen() {
           const m = r.data?.[0];
           if (m) lastDm.current[m.conversation_id] = m;
         });
+        if ((profRes as any).error) throw new Error('chat list unavailable');
         const profMap: Record<string, any> = {};
         ((profRes as any).data || []).forEach((p: any) => (profMap[p.id] = p));
         return otherParts.map((p: any) => ({
@@ -145,6 +154,7 @@ export default function ChatsScreen() {
           supabase.from('groups').select('id,name,avatar_url,cover_color').in('id', groupIds),
           supabase.from('group_messages').select(G_COLS).in('group_id', groupIds).order('created_at', { ascending: false }).limit(200),
         ]);
+        if ((groupsRes as any).error || (gmsgsRes as any).error) throw new Error('chat list unavailable');
         const unreadByGroup: Record<string, number> = {};
         ((ugRes as any).data || []).forEach((m: any) => {
           if (m.created_at > groupReadAt[m.group_id]) unreadByGroup[m.group_id] = (unreadByGroup[m.group_id] || 0) + 1;
@@ -299,6 +309,7 @@ export default function ChatsScreen() {
 
       const all = [...dmChats, ...groupChats].sort((a: any, b: any) => new Date(b.lastAt || 0).getTime() - new Date(a.lastAt || 0).getTime());
       setChats(all);
+      setLoadFailed(false);
       setLoading(false);
       AsyncStorage.setItem(`chats_cache_${myId}`, JSON.stringify(all.slice(0, 60))).catch(() => {});
     },
@@ -319,6 +330,8 @@ export default function ChatsScreen() {
         await doLoad(withReactions);
       } catch (err) {
         console.warn('[Chats] load failed:', err);
+        // Only say "couldn't load" when there is nothing to show; otherwise keep the list as it is.
+        if (!chatsRef.current.length) setLoadFailed(true);
         setLoading(false);
       } finally {
         runningRef.current = false;
@@ -329,6 +342,16 @@ export default function ChatsScreen() {
     },
     [doLoad]
   );
+
+  // Load the saved chat themes into memory so a chat opens in its own colours at once.
+  useEffect(() => {
+    warmChatThemes();
+  }, []);
+
+  // The connection came back: try the list again by itself.
+  useEffect(() => {
+    if (online && loadFailed) load(true);
+  }, [online, loadFailed]);
 
   // Show the last known list the instant the tab opens (before the network answers).
   useEffect(() => {
@@ -592,7 +615,18 @@ export default function ChatsScreen() {
         initialNumToRender={12}
         maxToRenderPerBatch={8}
         windowSize={7}
-        ListEmptyComponent={<Text style={[styles.empty, { color: colors.subtext }]}>No chats yet. Tap + to start one.</Text>}
+        ListEmptyComponent={
+          loadFailed ? (
+            <View style={{ alignItems: 'center', paddingHorizontal: 30 }}>
+              <Text style={[styles.empty, { color: colors.subtext, marginBottom: 12 }]}>Couldn't load your chats. Check your connection.</Text>
+              <TouchableOpacity onPress={() => { setLoadFailed(false); setLoading(true); load(true); }} style={{ paddingHorizontal: 22, paddingVertical: 10, borderRadius: 20, backgroundColor: colors.primary }}>
+                <Text style={{ color: '#fff', fontWeight: '800' }}>Try again</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <Text style={[styles.empty, { color: colors.subtext }]}>No chats yet. Tap + to start one.</Text>
+          )
+        }
       />
 
       <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>

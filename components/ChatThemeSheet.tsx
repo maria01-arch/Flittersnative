@@ -1,12 +1,11 @@
-import { Modal, View, TouchableOpacity, StyleSheet, Pressable, Image, ScrollView } from 'react-native';
-import Text from '@/components/AppText';
+import { Modal, View, Text, TouchableOpacity, StyleSheet, Pressable, Image, ScrollView } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/lib/ThemeContext';
-import { ChatTheme, WALLPAPER_PRESETS, BUBBLE_COLORS, pickWallpaper } from '@/lib/chatTheme';
+import { ChatTheme, WALLPAPER_PRESETS, BUBBLE_STYLES, resolveBubble, pickWallpaper } from '@/lib/chatTheme';
 
 // Verified members: 4 wallpaper presets or one of their own pictures, and a
-// colour for their own bubbles (navy, green or red). Changes apply at once
+// colour or gradient for their own bubbles (navy is the default for everyone). Changes apply at once
 // and only on this phone.
 export default function ChatThemeSheet({
   visible,
@@ -86,16 +85,20 @@ export default function ChatThemeSheet({
               )}
 
               <Text style={[styles.label, { color: colors.subtext, marginTop: 18 }]}>Your bubble colour</Text>
-              <View style={{ flexDirection: 'row', gap: 16, paddingVertical: 6 }}>
-                {(['default', 'navy', 'green', 'red'] as const).map((b) => (
-                  <TouchableOpacity
-                    key={b}
-                    onPress={() => onChange({ ...theme, bubble: b })}
-                    style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: b === 'default' ? colors.primary : BUBBLE_COLORS[b], borderWidth: 3, borderColor: theme.bubble === b ? colors.text : 'transparent', alignItems: 'center', justifyContent: 'center' }}
-                  >
-                    {theme.bubble === b && <Ionicons name="checkmark" size={20} color="#fff" />}
-                  </TouchableOpacity>
-                ))}
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 14, paddingVertical: 6 }}>
+                {BUBBLE_STYLES.map((b) => {
+                  const look = resolveBubble(b.id, colors.primary);
+                  const picked = (theme.bubble === 'navy' ? 'default' : theme.bubble) === b.id;
+                  return (
+                    <TouchableOpacity key={b.id} onPress={() => onChange({ ...theme, bubble: b.id })} style={{ alignItems: 'center', width: 54 }}>
+                      <View style={{ width: 44, height: 44, borderRadius: 22, borderWidth: 3, borderColor: picked ? colors.text : 'transparent', overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: look.color }}>
+                        {look.gradient && <LinearGradient colors={look.gradient as any} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />}
+                        {picked && <Ionicons name="checkmark" size={20} color="#fff" />}
+                      </View>
+                      <Text style={{ color: colors.subtext, fontSize: 10, marginTop: 3, textAlign: 'center' }} numberOfLines={1}>{b.name}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
               <Text style={{ color: colors.faint, fontSize: 12, marginTop: 10 }}>{note || 'Only you see these changes.'}</Text>
               {onReset && (

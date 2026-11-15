@@ -17,6 +17,7 @@ import LinkPreviewCard from './LinkPreviewCard';
 import ShareLinkSheet from './ShareLinkSheet';
 import { getFirstUrl } from '@/lib/linkPreview';
 import { commentLink } from '@/lib/flittersLinks';
+import PollCard from './PollCard';
 
 export default function CommentCard({
   comment,
@@ -82,7 +83,11 @@ export default function CommentCard({
             </TouchableOpacity>
           )}
         </View>
-        {!!comment.content && <LinkifiedText text={comment.content} style={[styles.content, { color: colors.text }]} linkColor={colors.primary} />}
+        {comment.poll_id ? (
+          <View style={{ marginTop: 8 }}>
+            <PollCard pollId={String(comment.poll_id)} width={260} />
+          </View>
+        ) : !!comment.content && <LinkifiedText text={comment.content} style={[styles.content, { color: colors.text }]} linkColor={colors.primary} />}
         {comment.sticker_url ? (
           <TouchableOpacity activeOpacity={0.85} onPress={() => currentUserId && setStickerMenu(true)} onLongPress={() => currentUserId && setStickerMenu(true)} style={{ marginTop: 6, alignSelf: 'flex-start' }}>
             <StickerMedia url={comment.sticker_url} size={120} />

@@ -12,7 +12,7 @@ import { useVideoThumb } from '@/lib/videoThumb';
 // the fix and the more familiar pattern — this is exactly how WhatsApp,
 // Telegram, and iMessage all handle a video attachment: a thumbnail-style
 // placeholder, nothing downloaded until it's actually tapped.
-export default function MessageVideoPlayer({ url }: { url: string }) {
+export default function MessageVideoPlayer({ url, captioned }: { url: string; captioned?: boolean }) {
   const [tapped, setTapped] = useState(false);
   const thumb = useVideoThumb(url);
   const player = useVideoPlayer(tapped ? url : null, (p) => {
@@ -21,15 +21,17 @@ export default function MessageVideoPlayer({ url }: { url: string }) {
 
   if (!tapped) {
     return (
-      <Pressable style={styles.video} onPress={() => setTapped(true)}>
+      <Pressable style={[styles.video, captioned && styles.videoCaptioned]} onPress={() => setTapped(true)}>
         <VideoPlaceholder posterUri={thumb?.uri} loading fit="cover" />
       </Pressable>
     );
   }
 
-  return <VideoView player={player} style={styles.video} nativeControls contentFit="cover" />;
+  return <VideoView player={player} style={[styles.video, captioned && styles.videoCaptioned]} nativeControls contentFit="cover" />;
 }
 
 const styles = StyleSheet.create({
   video: { width: 220, height: 260, borderRadius: 14, backgroundColor: '#00000020', overflow: 'hidden' },
+  // With a caption under it, the video only rounds its top corners.
+  videoCaptioned: { borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
 });

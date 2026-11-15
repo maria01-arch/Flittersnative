@@ -21,6 +21,9 @@ import StickerMedia from './StickerMedia';
 import { router } from 'expo-router';
 import { parseMomentReply } from '@/lib/momentReply';
 import MessageVideoPlayer from './MessageVideoPlayer';
+import PollCard from './PollCard';
+import { LinearGradient } from 'expo-linear-gradient';
+import { DEFAULT_BUBBLE_COLOR } from '@/lib/chatTheme';
 
 // A picture in a chat bubble: edge to edge (no padding, no frame) and shaped
 // like the picture itself instead of a fixed square. Very wide / very tall
@@ -114,6 +117,7 @@ export default function MessageBubble({
   onStickerPress,
   highlighted,
   myBubbleColor,
+  myBubbleGradient,
   onCopy,
   onEdit,
   onDelete,
@@ -128,6 +132,8 @@ export default function MessageBubble({
   replySticker,
   replyThumb,
   replyHeader,
+  viewOnceOpened,
+  onOpenViewOnce,
 }: {
   message: any;
   isMine: boolean;
@@ -148,6 +154,8 @@ export default function MessageBubble({
   highlighted?: boolean;
   // Chosen chat theme colour for MY bubbles (verified members only).
   myBubbleColor?: string;
+  // Two or more colours: my bubbles are painted as a gradient.
+  myBubbleGradient?: string[];
   onCopy: (m: any) => void;
   onEdit: (m: any) => void;
   onDelete: (m: any) => void;
@@ -168,6 +176,9 @@ export default function MessageBubble({
   replyThumb?: string;
   // Groups: "replied to you" / "replied to <name>" shown above a reply.
   replyHeader?: string;
+  // "View once" pictures/videos: has this phone already opened it, and open it now.
+  viewOnceOpened?: boolean;
+  onOpenViewOnce?: (m: any) => void;
 }) {
   const { colors } = useTheme();
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -240,12 +251,14 @@ export default function MessageBubble({
   const isVoice = !!(message.is_voice && message.voice_url);
   const isSticker = !!(message.is_sticker && message.sticker_url);
   const isPack = !!message.shared_pack_id;
-  const isVideo = !!(message.video_url && !isVoice && !isSticker);
-  const isImage = !!(message.image_url && !isVoice && !isSticker && !isVideo);
+  const isViewOnce = !!(message.view_once && (message.image_url || message.video_url) && !isVoice && !isSticker);
+  const isPoll = !!message.poll_id && !isVoice && !isSticker;
+  const isVideo = !!(message.video_url && !isVoice && !isSticker && !isViewOnce);
+  const isImage = !!(message.image_url && !isVoice && !isSticker && !isVideo && !isViewOnce);
   const isPending = !!message._pending;
   const isFailed = !!message._failed;
   // One emoji and nothing else: shown big, with no bubble.
-  const isEmojiOnly = !isVoice && !isSticker && !isVideo && !isImage && !message.reply_to && isSingleEmoji(message.content);
+  const isEmojiOnly = !isVoice && !isSticker && !isVideo && !isImage && !isViewOnce && !isPoll && !message.reply_to && isSingleEmoji(message.content);
   const momentRef = parseMomentReply(message.reply_to);
   const stickerQuote = !!replySticker && !/\.(webm|mp4|mov|m4v)($|\?)/i.test(replySticker);
 
@@ -293,7 +306,7 @@ export default function MessageBubble({
   };
 
   const linkUrl = !isSticker && !isVoice && !isVideo && !isImage && !isEmojiOnly && message.content ? getFirstUrl(String(message.content)) : null;
-  const canEdit = isMine && !isVoice && !isSticker && !isPack && !isVideo && !isPending && !isFailed;
+  const canEdit = isMine && !isVoice && !isSticker && !isPack && !isVideo && !isViewOnce && !isPoll && !isPending && !isFailed;
   const actions: MenuAction[] = [
     { key: 'reply', label: 'Reply', icon: 'arrow-undo-outline', onPress: doAfterClose(() => onReply(message)) },
     ...(message.content && String(message.content).trim() && !isVoice && !isSticker && !isPack
@@ -302,7 +315,7 @@ export default function MessageBubble({
     ...(rawText.trim().length > 150 && !isVoice && !isSticker && !isPack
       ? [{ key: 'readfull', label: 'Read in full', icon: 'reader-outline', onPress: doAfterClose(() => setTimeout(() => setReadFull(true), 250)) }]
       : []),
-    ...(onForward && !isPending && !isFailed
+    ...(onForward && !isPending && !isFailed && !isViewOnce
       ? [{ key: 'forward', label: 'Forward', icon: 'arrow-redo-outline', onPress: doAfterClose(() => onForward(message)) }]
       : []),
     ...(!isPending && !isFailed
@@ -332,9 +345,9 @@ export default function MessageBubble({
         </View>
       )}
       {!!replyHeader && !momentRef && (
-        <View style={[styles.pinRow, isMine ? { justifyContent: 'flex-end' } : { justifyContent: 'flex-start' }]}>
+        <View style={[styles.pinRow, { maxWidth: 250 }, isMine ? { justifyContent: 'flex-end' } : { justifyContent: 'flex-start' }]}>
           <Ionicons name="arrow-undo" size={14} color={replyHeader === 'replied to you' ? colors.primary : colors.subtext} />
-          <Text style={{ fontSize: 14, fontWeight: '700', color: replyHeader === 'replied to you' ? colors.primary : colors.subtext }}>{replyHeader}</Text>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={{ flexShrink: 1, fontSize: 14, fontWeight: '700', color: replyHeader === 'replied to you' ? colors.primary : colors.subtext }}>{replyHeader}</Text>
         </View>
       )}
       {!!message.is_forwarded && (
@@ -346,9 +359,13 @@ export default function MessageBubble({
       <View
         style={[
           !isSticker && !isPack && styles.bubble,
-          !isSticker && !isPack && (isMine ? { backgroundColor: myBubbleColor || colors.primary } : { backgroundColor: colors.bubbleTheirs }),
+          isPoll && { width: 260 },
+          // A reply keeps a little room so a short message under a quote is not squeezed to nothing.
+          !!message.reply_to && !isSticker && !isPack && { minWidth: 120 },
+          !isSticker && !isPack && (isMine ? { backgroundColor: myBubbleColor || DEFAULT_BUBBLE_COLOR, ...(myBubbleGradient ? { overflow: 'hidden' as const } : {}) } : { backgroundColor: colors.bubbleTheirs }),
           isVoice && styles.voiceBubble,
           (isImage || isVideo) && styles.imageBubble,
+          isVideo && !!message.content && { paddingHorizontal: 2, paddingVertical: 2, borderRadius: 17, overflow: 'hidden' },
           // A picture on its own has no bubble at all; with a caption it gets a
           // thin one (4px) around picture + text.
           isImage && !message.content && { backgroundColor: 'transparent' },
@@ -357,6 +374,9 @@ export default function MessageBubble({
           isEmojiOnly && { backgroundColor: 'transparent', paddingHorizontal: 2, paddingVertical: 0, alignSelf: isMine ? 'flex-end' : 'flex-start' },
         ]}
       >
+        {isMine && !!myBubbleGradient && !isSticker && !isPack && !isEmojiOnly && !(isImage && !message.content) && (
+          <LinearGradient colors={myBubbleGradient as any} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
+        )}
         {message.reply_to ? (
           <TouchableOpacity
             activeOpacity={0.7}
@@ -364,23 +384,52 @@ export default function MessageBubble({
             onPress={momentRef ? () => router.push({ pathname: '/moment/[uid]', params: { uid: momentRef.ownerId, at: momentRef.momentId } }) : onPressReply}
             style={[
               styles.replyQuote,
+              // Never wider than the message under it: the quote takes the bubble's width, it does not set it.
+              { width: 0, minWidth: '100%' },
               { borderLeftColor: isMine && !isSticker ? 'rgba(255,255,255,0.6)' : colors.primary },
               (stickerQuote || isSticker || !!replyThumb) && { flexDirection: 'row', alignItems: 'center', gap: 6 },
               // A sticker has no bubble to hold the quote, so the quote gets its own small pill.
-              isSticker && { backgroundColor: colors.bubbleTheirs, borderRadius: 10, paddingVertical: 5, paddingRight: 8, marginBottom: 4 },
+              // (as wide as the sticker itself, never stretched to the width of the name line above it)
+              isSticker && { backgroundColor: colors.bubbleTheirs, borderRadius: 10, paddingVertical: 5, paddingRight: 8, marginBottom: 4, width: 132, minWidth: 0, alignSelf: isMine ? 'flex-end' : 'flex-start' },
             ]}
           >
-            {stickerQuote ? <StickerMedia url={replySticker as string} size={30} /> : null}
+            {stickerQuote ? <StickerMedia url={replySticker as string} size={40} /> : null}
             {replyThumb ? <Image source={{ uri: optimizedUrl(replyThumb, Math.ceil(36 * PixelRatio.get())) || replyThumb }} style={{ width: 34, height: 34, borderRadius: 6, backgroundColor: 'rgba(0,0,0,0.12)' }} resizeMode="cover" /> : null}
             <Text
               style={[styles.replyQuoteText, { flexShrink: 1, color: isMine && !isSticker ? 'rgba(255,255,255,0.85)' : colors.subtext }]}
-              numberOfLines={1}
+              numberOfLines={3}
+              ellipsizeMode="tail"
             >
               {momentRef ? (isMine ? 'You replied to a moment' : 'Replied to your moment') : message.reply_to}
             </Text>
           </TouchableOpacity>
         ) : null}
-        {isPack ? (
+        {isPoll ? (
+          <Pressable disabled={preview} onLongPress={openMenu} delayLongPress={220}>
+            <PollCard pollId={String(message.poll_id)} onDark={isMine} width={232} />
+          </Pressable>
+        ) : isViewOnce ? (
+          // Tap to look once. After that (or when I sent it) only a small note stays.
+          <Pressable
+            disabled={preview}
+            onPress={() => !isMine && !viewOnceOpened && !isPending && onOpenViewOnce?.(message)}
+            onLongPress={openMenu}
+            delayLongPress={220}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 2 }}
+          >
+            <View style={{ width: 30, height: 30, borderRadius: 15, borderWidth: 1.5, borderStyle: viewOnceOpened ? 'dashed' : 'solid', borderColor: isMine ? '#fff' : colors.primary, alignItems: 'center', justifyContent: 'center' }}>
+              <Ionicons name={message.video_url ? 'videocam' : 'image'} size={15} color={isMine ? '#fff' : colors.primary} />
+            </View>
+            <View>
+              <Text style={{ color: isMine ? '#fff' : colors.text, fontWeight: '700', fontSize: 14 }}>
+                {isMine ? (message.video_url ? 'Video' : 'Photo') : viewOnceOpened ? 'Opened' : message.video_url ? 'Video' : 'Photo'}
+              </Text>
+              <Text style={{ color: isMine ? 'rgba(255,255,255,0.8)' : colors.subtext, fontSize: 12 }}>
+                {isMine ? 'View once · sent' : viewOnceOpened ? 'View once · already seen' : 'Tap to view · once'}
+              </Text>
+            </View>
+          </Pressable>
+        ) : isPack ? (
           <Pressable disabled={preview} onLongPress={openMenu} delayLongPress={220}>
             <StickerPackCard packId={message.shared_pack_id} currentUserId={currentUserId} isMine={isMine} onLongPress={openMenu} />
           </Pressable>
@@ -392,7 +441,26 @@ export default function MessageBubble({
         ) : isVoice ? (
           <VoiceMessagePlayer url={message.voice_url} duration={message.voice_duration} isMine={isMine} onLongPress={preview ? undefined : openMenu} />
         ) : isVideo ? (
-          <MessageVideoPlayer url={message.video_url} />
+          <>
+            <MessageVideoPlayer url={message.video_url} captioned={!!message.content} />
+            {!!message.content && (
+              // The caption sits right under the video, exactly as wide as the video.
+              <View style={{ width: 220, paddingHorizontal: 9, paddingTop: 7, paddingBottom: 3 }}>
+                <View>
+                  <LinkifiedText
+                    text={message.content}
+                    style={isMine ? styles.myText : [styles.theirText, { color: colors.text }]}
+                    linkColor={isMine ? '#D6E4FF' : colors.primary}
+                    numberOfLines={textLimit}
+                  />
+                  {textMeasurer}
+                </View>
+                {textLong && (
+                  <Text onPress={() => setTextOpen((v) => !v)} style={{ color: isMine ? '#D6E4FF' : colors.primary, fontWeight: '700', marginTop: 4 }}>{textOpen ? 'See less' : 'See more'}</Text>
+                )}
+              </View>
+            )}
+          </>
         ) : isImage ? (
           // A tap opens the image fullscreen — this used to sit inside a
           // TouchableOpacity that only had onLongPress wired up, so taps

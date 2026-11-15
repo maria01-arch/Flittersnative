@@ -1,3 +1,4 @@
+import { PlusButton, ActionTray } from '@/components/ComposerActions';
 import { useEffect, useRef, useState } from 'react';
 import { deleteLast } from '@/lib/emojiSplit';
 import { Animated, ScrollView } from 'react-native';
@@ -19,7 +20,10 @@ import CommentCard from '@/components/CommentCard';
 import { loadCommentTree, pickCommentImage } from '@/lib/comments';
 import { uploadImage } from '@/lib/upload';
 import { canPerform, permissionDeniedMessage } from '@/lib/permissions';
-import { notifyOnce, createQuoteRepost, applyCounts, fetchMyFlags, coownersEmbed } from '@/lib/postActions';
+import MentionSuggest from '@/components/MentionSuggest';
+import PollCreateSheet from '@/components/PollCreateSheet';
+import { pollContent } from '@/lib/polls';
+import { notifyMentions, notifyOnce, createQuoteRepost, applyCounts, fetchMyFlags, coownersEmbed } from '@/lib/postActions';
 import { PostSkeleton, ListSkeleton } from '@/components/Skeleton';
 import VideoPostPlayer from '@/components/VideoPostPlayer';
 import GlassButton from '@/components/GlassButton';
@@ -200,6 +204,22 @@ export default function PostDetailScreen() {
     setComments((prev) => prev.filter((x) => x.id !== c.id));
   };
 
+  const [pollOpen, setPollOpen] = useState(false);
+  const [plusOpen, setPlusOpen] = useState(false);
+  // A poll posted as a comment.
+  const postPollComment = async (pollId: string, question: string) => {
+    if (!session?.user?.id) return;
+    const { error } = await supabase.from('comments').insert({ post_id: id, user_id: session.user.id, content: pollContent(question), poll_id: pollId });
+    if (error) {
+      Alert.alert("Couldn't post", 'Check your connection and try again.');
+      return;
+    }
+    if (post?.user_id && post.user_id !== session.user.id) {
+      await supabase.from('notifications').insert({ user_id: post.user_id, actor_id: session.user.id, type: 'comment', post_id: id });
+    }
+    await load();
+  };
+
   const submitCommentInFlight = useRef(false);
   const submitComment = async () => {
     if ((!text.trim() && !commentImage && !pendingSticker) || !session?.user?.id || !post || submitCommentInFlight.current) return;
@@ -230,6 +250,8 @@ export default function PostDetailScreen() {
     if (post?.user_id && post.user_id !== session.user.id) {
       await supabase.from('notifications').insert({ user_id: post.user_id, actor_id: session.user.id, type: 'comment', post_id: id });
     }
+    // People tagged with @username in the comment get a notification.
+    notifyMentions([text.trim()], String(id), session.user.id, post?.user_id ? [post.user_id] : []).catch(() => {});
     setText('');
     setCommentImage(null);
     setPendingSticker(null);
@@ -276,13 +298,19 @@ export default function PostDetailScreen() {
           onDismiss={clip.dismiss}
         />
       )}
+      <MentionSuggest text={text} onChange={setText} />
+      <ActionTray
+        open={plusOpen}
+        onClose={() => setPlusOpen(false)}
+        actions={[
+          { key: 'media', icon: 'image-outline', label: 'Photo', onPress: async () => { const u = await pickCommentImage(); if (u) { setCommentImage(u); setPendingSticker(null); } } },
+          { key: 'sticker', icon: 'happy-outline', label: 'Stickers', onPress: () => { Keyboard.dismiss(); setShowTray(true); } },
+          { key: 'poll', icon: 'stats-chart-outline', label: 'Poll', onPress: () => { Keyboard.dismiss(); setPollOpen(true); } },
+        ]}
+      />
+      <PollCreateSheet visible={pollOpen} onClose={() => setPollOpen(false)} onCreated={postPollComment} />
       <View style={[styles.inputBar, { borderTopColor: colors.border, backgroundColor: colors.card }]}>
-        <TouchableOpacity onPress={async () => { const u = await pickCommentImage(); if (u) { setCommentImage(u); setPendingSticker(null); } }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="image-outline" size={26} color={colors.primary} />
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => { Keyboard.dismiss(); setShowTray((v) => !v); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name={showTray ? 'happy' : 'happy-outline'} size={26} color={colors.primary} />
-        </TouchableOpacity>
+        <PlusButton open={plusOpen} onPress={() => setPlusOpen((v) => !v)} />
         <PasteTextInput
               onPasteImage={(u) => setCommentImage(u)}
           style={[styles.input, { backgroundColor: colors.inputBg, color: colors.text }]}

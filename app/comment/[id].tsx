@@ -1,3 +1,4 @@
+import { PlusButton, ActionTray } from '@/components/ComposerActions';
 import { useEffect, useRef, useState } from 'react';
 import { View, FlatList, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Image } from 'react-native';
 import Text from '@/components/AppText';
@@ -14,6 +15,11 @@ import CommentCard from '@/components/CommentCard';
 import { loadCommentTree, pickCommentImage } from '@/lib/comments';
 import { uploadImage } from '@/lib/upload';
 import { canPerform, permissionDeniedMessage } from '@/lib/permissions';
+import MentionSuggest from '@/components/MentionSuggest';
+import PollCreateSheet from '@/components/PollCreateSheet';
+import { pollContent } from '@/lib/polls';
+import { notifyMentions } from '@/lib/postActions';
+import { Keyboard } from 'react-native';
 
 export default function CommentThreadScreen() {
   const { id, postId } = useLocalSearchParams();
@@ -75,6 +81,18 @@ export default function CommentThreadScreen() {
     }
   };
 
+  const [pollOpen, setPollOpen] = useState(false);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const postPollReply = async (pollId: string, question: string) => {
+    if (!session?.user?.id || !root) return;
+    const { error } = await supabase.from('comments').insert({ post_id: postId, user_id: session.user.id, content: pollContent(question), reply_to_comment_id: root.id, poll_id: pollId });
+    if (error) {
+      Alert.alert("Couldn't post", 'Check your connection and try again.');
+      return;
+    }
+    await load();
+  };
+
   const submitReply = async () => {
     if ((!text.replace(/^@\S+\s*/, '').trim() && !replyImage) || !session?.user?.id || !root) return;
     // A reply is still a comment on the original post, so it's gated by
@@ -111,6 +129,8 @@ export default function CommentThreadScreen() {
     if (root.user_id && root.user_id !== session.user.id) {
       await supabase.from('notifications').insert({ user_id: root.user_id, actor_id: session.user.id, type: 'comment', post_id: postId });
     }
+    // People tagged with @username in the reply get a notification (the person replied to already gets one).
+    notifyMentions([mention(text.trim())], String(postId), session.user.id, root.user_id ? [root.user_id] : []).catch(() => {});
     setText('');
     setReplyImage(null);
     await load();
@@ -180,10 +200,18 @@ export default function CommentThreadScreen() {
           onDismiss={clip.dismiss}
         />
       )}
+      <MentionSuggest text={text} onChange={setText} />
+      <ActionTray
+        open={plusOpen}
+        onClose={() => setPlusOpen(false)}
+        actions={[
+          { key: 'media', icon: 'image-outline', label: 'Photo', onPress: async () => { const u = await pickCommentImage(); if (u) setReplyImage(u); } },
+          { key: 'poll', icon: 'stats-chart-outline', label: 'Poll', onPress: () => { Keyboard.dismiss(); setPollOpen(true); } },
+        ]}
+      />
+      <PollCreateSheet visible={pollOpen} onClose={() => setPollOpen(false)} onCreated={postPollReply} />
       <View style={[styles.inputBar, { borderTopColor: colors.border, backgroundColor: colors.card }]}>
-        <TouchableOpacity onPress={async () => { const u = await pickCommentImage(); if (u) setReplyImage(u); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="image-outline" size={26} color={colors.primary} />
-        </TouchableOpacity>
+        <PlusButton open={plusOpen} onPress={() => setPlusOpen((v) => !v)} />
         <PasteTextInput
               onPasteImage={(u) => setReplyImage(u)}
           style={[styles.input, { backgroundColor: colors.inputBg, color: colors.text }]}

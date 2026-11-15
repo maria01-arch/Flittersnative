@@ -5,7 +5,9 @@ import { Image } from 'expo-image';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/ThemeContext';
-import { addStickerToMyPack, findPackIdByUrl } from '@/lib/stickerActions';
+import { Alert } from 'react-native';
+import { addStickerToMyPack, findPackIdByUrl, listMyPacks, copyPackToMine, MyPack } from '@/lib/stickerActions';
+import ActionSheet from './ActionSheet';
 import StickerMedia from './StickerMedia';
 
 const VIDEO_EXT = /\.(webm|mp4|mov|m4v)($|[?#])/i;
@@ -87,16 +89,45 @@ export default function StickerPackCard({ packId, currentUserId, isMine, onLongP
           <Text style={styles.btnText}>View pack</Text>
         </View>
       </Pressable>
-      <StickerPackSheet visible={open} packId={packId} me={currentUserId} onClose={() => setOpen(false)} />
+      <StickerPackSheet visible={open} packId={packId} me={currentUserId} saveAll onClose={() => setOpen(false)} />
     </>
   );
 }
 
 // The full pack: every sticker, and a Save button on each (one at a time).
-export function StickerPackSheet({ visible, packId, stickerUrl, me, onClose }: { visible: boolean; packId?: string | null; stickerUrl?: string | null; me?: string; onClose: () => void }) {
+export function StickerPackSheet({ visible, packId, stickerUrl, me, saveAll, onClose }: { visible: boolean; packId?: string | null; stickerUrl?: string | null; me?: string; saveAll?: boolean; onClose: () => void }) {
   const { colors } = useTheme();
   const [pack, setPack] = useState<PackData | null | undefined>(undefined);
   const [saved, setSaved] = useState<Record<string, 'saving' | 'done' | 'limit'>>({});
+  const [allBusy, setAllBusy] = useState(false);
+  const [destOpen, setDestOpen] = useState(false);
+  const [myPacks, setMyPacks] = useState<MyPack[]>([]);
+
+  // Takes the whole pack into one of my packs (asks which one when I have several).
+  const takeAll = async () => {
+    if (!me || !pack || allBusy) return;
+    const packs = await listMyPacks(me);
+    if (packs.length > 1) {
+      setMyPacks(packs);
+      setDestOpen(true);
+      return;
+    }
+    doTakeAll(packs[0]?.id || null, packs[0]?.name || 'My Stickers');
+  };
+  const doTakeAll = async (targetId: string | null, targetName: string) => {
+    if (!pack) return;
+    setDestOpen(false);
+    setAllBusy(true);
+    const r = await copyPackToMine(pack.id, targetId);
+    setAllBusy(false);
+    if (!r.ok) return Alert.alert("Couldn't save the pack", r.message || 'Please try again.');
+    setSaved(() => {
+      const n: Record<string, 'done'> = {};
+      pack.stickers.forEach((s) => (n[s.id] = 'done'));
+      return n;
+    });
+    Alert.alert(r.added ? 'Pack saved' : 'Already saved', r.added ? `${r.added} ${r.added === 1 ? 'sticker was' : 'stickers were'} added to "${targetName}".` : `You already have every sticker of this pack in "${targetName}".`);
+  };
 
   useEffect(() => {
     if (!visible) return;
@@ -147,7 +178,8 @@ export function StickerPackSheet({ visible, packId, stickerUrl, me, onClose }: {
             <Text style={{ color: colors.subtext, textAlign: 'center', margin: 30 }}>This pack isn't available.</Text>
           ) : (
             <>
-              {!mine && <Text style={{ color: colors.faint, fontSize: 12, paddingHorizontal: 16, paddingBottom: 8 }}>Tap a sticker to save it to your stickers. Free accounts: 20 a day. Verified: unlimited.</Text>}
+              {!mine && !saveAll && <Text style={{ color: colors.faint, fontSize: 12, paddingHorizontal: 16, paddingBottom: 8 }}>Tap a sticker to save it to your stickers. Free accounts: 20 a day. Verified: unlimited.</Text>}
+              {!mine && saveAll && <Text style={{ color: colors.faint, fontSize: 12, paddingHorizontal: 16, paddingBottom: 8 }}>Save the whole pack in one tap, or tap a single sticker to save just that one.</Text>}
               <ScrollView contentContainerStyle={styles.sheetGrid}>
                 {pack.stickers.slice(0, 80).map((s) => {
                   const st = saved[s.id];
@@ -163,6 +195,17 @@ export function StickerPackSheet({ visible, packId, stickerUrl, me, onClose }: {
                   );
                 })}
               </ScrollView>
+              {!mine && saveAll && !!me && (
+                <TouchableOpacity onPress={takeAll} disabled={allBusy} style={[styles.btn, { backgroundColor: colors.primary, marginHorizontal: 16, marginTop: 4, opacity: allBusy ? 0.6 : 1 }]}>
+                  {allBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Save whole pack ({pack.stickers.length})</Text>}
+                </TouchableOpacity>
+              )}
+              <ActionSheet
+                visible={destOpen}
+                title="Save into which pack?"
+                onClose={() => setDestOpen(false)}
+                options={myPacks.map((p) => ({ label: p.name || 'My Stickers', icon: 'albums-outline' as const, onPress: () => doTakeAll(p.id, p.name || 'My Stickers') }))}
+              />
               {Object.values(saved).includes('limit') && <Text style={{ color: '#EF4444', textAlign: 'center', paddingBottom: 12 }}>Daily limit reached (free accounts). Verified members save unlimited.</Text>}
             </>
           )}
