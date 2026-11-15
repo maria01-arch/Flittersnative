@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Animated, Alert } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, ActivityIndicator, Animated, Alert, Image } from 'react-native';
+import Text from '@/components/AppText';
 import { BlurView } from 'expo-blur';
+import { onOwnBadgeChanged } from '@/lib/billingRefresh';
 import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
-import { useScreenSecure } from '@/lib/screenSecure';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
@@ -17,7 +18,18 @@ import { canPerform, permissionDeniedMessage } from '@/lib/permissions';
 import { notifyOnce, createQuoteRepost, applyCounts, fetchMyFlags, coownersEmbed } from '@/lib/postActions';
 import StatusBarScrim from '@/components/StatusBarScrim';
 import { ProfileHeaderSkeleton, FeedSkeleton } from '@/components/Skeleton';
+import { LinearGradient } from 'expo-linear-gradient';
+import LiveCover from '@/components/LiveCover';
+import ImageViewer from '@/components/ImageViewer';
+import RingAvatar from '@/components/RingAvatar';
+import { ringFor } from '@/lib/momentRings';
+import { fmtCount } from '@/lib/formatCount';
+import ProfileQRModal from '@/components/ProfileQRModal';
+import NameInfoModal from '@/components/NameInfoModal';
+import ShareLinkSheet from '@/components/ShareLinkSheet';
+import { profileLink } from '@/lib/flittersLinks';
 import { sendFollowRequest, cancelFollowRequest, hasPendingRequest } from '@/lib/followRequests';
+import { useScreenSecure } from '@/lib/screenSecure';
 
 const AnimatedFlatList = Animated.createAnimatedComponent(require('react-native').FlatList);
 
@@ -26,6 +38,9 @@ export default function UserProfileScreen() {
   const { session } = useAuth();
   const { colors, isDark } = useTheme();
   const [profile, setProfile] = useState<any>(null);
+  useEffect(() => onOwnBadgeChanged((uid, patch) => {
+    setProfile((p: any) => (p && p.id === uid ? { ...p, ...patch } : p));
+  }), []);
   const [posts, setPosts] = useState<any[]>([]);
   const [reposts, setReposts] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'posts' | 'reposts' | 'videos'>('posts');
@@ -35,17 +50,44 @@ export default function UserProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [pillWidth, setPillWidth] = useState<number | null>(null);
   const scrollY = useRef(new Animated.Value(0)).current;
+  // The big name only takes taps while it is actually visible (before the page scrolls it away).
+  const [bigTouch, setBigTouch] = useState(true);
+  useEffect(() => {
+    const lid = scrollY.addListener(({ value }: { value: number }) => setBigTouch(value < 45));
+    return () => scrollY.removeListener(lid);
+  }, []);
+  const [qrOpen, setQrOpen] = useState(false);
+  const [nameInfoOpen, setNameInfoOpen] = useState(false);
+  // Bell: get a notification whenever this person posts.
+  const [bellOn, setBellOn] = useState(false);
+  const [bellBusy, setBellBusy] = useState(false);
+  const [shareProfileOpen, setShareProfileOpen] = useState(false);
 
   // One video at a time on a profile too, and none once you leave the screen.
   const [activeVideoKey, setActiveVideoKey] = useState<string | null>(null);
   const [screenFocused, setScreenFocused] = useState(true);
+  // The live cover stops once the cover has scrolled out of sight.
+  const [coverAway, setCoverAway] = useState(false);
+  const [viewAvatar, setViewAvatar] = useState(false);
+  // Total likes this person's posts and reels have received (needs profile_likes.sql; until then it adds up the posts loaded here).
+  const [totalLikes, setTotalLikes] = useState<number | null>(null);
+  useEffect(() => {
+    if (!id) return;
+    supabase.rpc('profile_likes_total', { p_user: String(id) }).then(({ data, error }: any) => {
+      if (!error && data !== null && data !== undefined) setTotalLikes(Number(data));
+    });
+  }, [id]);
+  useEffect(() => {
+    const lid = scrollY.addListener(({ value }: { value: number }) => setCoverAway((was) => (was ? value > 150 : value > 200)));
+    return () => scrollY.removeListener(lid);
+  }, [scrollY]);
   useFocusEffect(
     useCallback(() => {
       setScreenFocused(true);
       return () => setScreenFocused(false);
     }, [])
   );
-  // Nobody can screenshot or record someone else's profile (their picture). Your own is yours to capture.
+  // Screenshots and screen recording are blocked on other people's profiles (needs expo-screen-capture in the build).
   useScreenSecure(screenFocused && session?.user?.id !== id, 'flitters-profile');
   const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
     const firstVideo = viewableItems.find((v: any) => v.item?.video_url);
@@ -58,7 +100,7 @@ export default function UserProfileScreen() {
       supabase.from('profiles').select('*').eq('id', id).single(),
       supabase.from('posts').select(`*,author:profiles(id,display_name,username,avatar_url,verified,is_authentic,verified_plan,who_can_repost,who_can_comment),likes(count),reposts(count),comments(count)${coownersEmbed()}`).eq('user_id', id).or('thread_order.is.null,thread_order.eq.0').order('created_at', { ascending: false }),
       session?.user?.id
-        ? supabase.from('follows').select('id').eq('follower_id', session.user.id).eq('following_id', id).maybeSingle()
+        ? supabase.from('follows').select('follower_id').eq('follower_id', session.user.id).eq('following_id', id).limit(1).then((r: any) => ({ data: r.data && r.data.length ? r.data[0] : null }))
         : Promise.resolve({ data: null }),
       supabase
         .from('reposts')
@@ -112,6 +154,34 @@ export default function UserProfileScreen() {
     if (!id) return;
     load();
   }, [id, session]);
+
+  useEffect(() => {
+    const me = session?.user?.id;
+    if (!me || !id || me === id) return;
+    supabase
+      .from('profile_post_alerts')
+      .select('id')
+      .eq('user_id', me)
+      .eq('target_id', id as string)
+      .maybeSingle()
+      .then(({ data }) => setBellOn(!!data));
+  }, [id, session?.user?.id]);
+
+  const toggleBell = async () => {
+    const me = session?.user?.id;
+    if (!me || !id || bellBusy) return;
+    setBellBusy(true);
+    const want = !bellOn;
+    setBellOn(want);
+    const res = want
+      ? await supabase.from('profile_post_alerts').insert({ user_id: me, target_id: id as string }).select('id')
+      : await supabase.from('profile_post_alerts').delete().eq('user_id', me).eq('target_id', id as string).select('id');
+    if (res.error || (!want ? false : !res.data?.length)) {
+      setBellOn(!want);
+      Alert.alert("Couldn't change that", res.error?.message || 'Please try again.');
+    }
+    setBellBusy(false);
+  };
 
   const likeInFlight = useRef<Set<string>>(new Set());
   const repostInFlight = useRef<Set<string>>(new Set());
@@ -189,15 +259,30 @@ export default function UserProfileScreen() {
         await cancelFollowRequest(session.user.id, id as string);
       } else {
         setRequested(true);
-        await sendFollowRequest(session.user.id, id as string);
+        const { error } = await sendFollowRequest(session.user.id, id as string);
+        // A leftover request from before is fine; anything else: undo and say why.
+        if (error && (error as any).code !== '23505') {
+          setRequested(false);
+          Alert.alert("Couldn't send request", error.message || 'Try again.');
+        }
       }
       return;
     }
-    setIsFollowing(!isFollowing);
-    if (isFollowing) {
-      await supabase.from('follows').delete().eq('follower_id', session.user.id).eq('following_id', id);
+    const wasFollowing = isFollowing;
+    setIsFollowing(!wasFollowing);
+    if (wasFollowing) {
+      const { error } = await supabase.from('follows').delete().eq('follower_id', session.user.id).eq('following_id', id);
+      if (error) {
+        setIsFollowing(true);
+        Alert.alert("Couldn't unfollow", error.message || 'Try again.');
+      }
     } else {
-      await supabase.from('follows').insert({ follower_id: session.user.id, following_id: id });
+      const { error } = await supabase.from('follows').insert({ follower_id: session.user.id, following_id: id });
+      if (error && (error as any).code !== '23505') {
+        setIsFollowing(false);
+        Alert.alert("Couldn't follow", error.message || 'Try again.');
+        return;
+      }
       await notifyOnce({ userId: id as string, actorId: session.user.id, type: 'follow' });
     }
   };
@@ -229,6 +314,7 @@ export default function UserProfileScreen() {
   const [menuOpen, setMenuOpen] = useState(false);
   const openMenu = () => setMenuOpen(true);
   const profileMenuOptions: ActionSheetOption[] = [
+    { label: 'Share profile', icon: 'share-social-outline', onPress: () => setTimeout(() => setShareProfileOpen(true), 250) },
     { label: isBlocked ? 'Unblock' : 'Block', icon: 'ban-outline', destructive: true, onPress: toggleBlock },
     { label: 'Report', icon: 'flag-outline', onPress: () => setReportOpen(true) },
   ];
@@ -310,15 +396,16 @@ export default function UserProfileScreen() {
   // (different OS, larger system font size, etc.) that gap goes negative
   // and the username visibly sits on top of the bio. This needs real
   // breathing room, not a number tuned to the exact pixel.
-  const HEADER_RESERVE = 210;
+  const COVER_SPACE = 150;
+  const AVATAR_BIG = 92;
   // Big avatar + big name: fade out together, in place, before scroll 90 —
   // no motion, so nothing to get wrong.
   const bigOpacity = scrollY.interpolate({ inputRange: [0, 90], outputRange: [1, 0], extrapolate: 'clamp' });
   // Glass pill: fades in over the back half of the scroll, sliding the
   // last little bit up into its resting spot (translate-only, so this
   // slide is pixel-accurate, unlike the old scale-based one).
-  const pillOpacity = scrollY.interpolate({ inputRange: [90, 140], outputRange: [0, 1], extrapolate: 'clamp' });
-  const pillTranslateY = scrollY.interpolate({ inputRange: [90, 140], outputRange: [10, 0], extrapolate: 'clamp' });
+  const pillOpacity = scrollY.interpolate({ inputRange: [250, 300], outputRange: [0, 1], extrapolate: 'clamp' });
+  const pillTranslateY = scrollY.interpolate({ inputRange: [250, 300], outputRange: [10, 0], extrapolate: 'clamp' });
   // The pill starts as a plain circle — same width as its own height, so
   // borderRadius:19 makes it round rather than a stadium shape — and
   // widens into the full pill as it fades in. DOT_SIZE (38) lines up with
@@ -329,7 +416,7 @@ export default function UserProfileScreen() {
   // (see the BlurView's onLayout below); until that lands, 150 is just a
   // reasonable placeholder so nothing breaks on the very first frame.
   const DOT_SIZE = 38;
-  const pillWidthAnim = scrollY.interpolate({ inputRange: [90, 140], outputRange: [DOT_SIZE, pillWidth || 150], extrapolate: 'clamp' });
+  const pillWidthAnim = scrollY.interpolate({ inputRange: [250, 300], outputRange: [DOT_SIZE, pillWidth || 150], extrapolate: 'clamp' });
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -345,12 +432,40 @@ export default function UserProfileScreen() {
         renderItem={({ item }: any) => <PostCard post={item} active={screenFocused && (item.feedKey || item.id) === activeVideoKey} currentUserId={session?.user?.id} onLike={toggleLike} onRepost={toggleRepost} onQuote={quoteRepost} onDelete={deletePost} />}
         ListHeaderComponent={
           <View style={[styles.header, { backgroundColor: colors.bg, borderBottomColor: colors.border }]}>
-            <View style={{ height: HEADER_RESERVE }} />
-            {profile?.bio ? <Text style={[styles.bio, { color: colors.text }]}>{profile.bio}</Text> : null}
-            <View style={styles.statsRow}>
-              <Text style={[styles.stat, { color: colors.subtext }]}><Text style={[styles.statNum, { color: colors.text }]}>{profile?.followers_count || 0}</Text> Followers</Text>
-              <TouchableOpacity onPress={openFollowing}>
-                <Text style={[styles.stat, { color: colors.subtext }]}><Text style={[styles.statNum, { color: colors.text }]}>{profile?.following_count || 0}</Text> Following</Text>
+            {/* Cover photo: the profile picture sits across its bottom edge (top half on the cover). */}
+            <View style={styles.cover} pointerEvents="none">
+              {profile?.cover_url ? (
+                <Image source={{ uri: profile.cover_url }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+              ) : (
+                <LinearGradient colors={[colors.primary + 'CC', colors.primary + '33']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+              )}
+              {/* Live cover: only for blue-badge (or gold) accounts, only while this screen is in front. */}
+              {profile?.cover_video_url && (profile?.verified || profile?.is_authentic) && screenFocused ? <LiveCover url={profile.cover_video_url} paused={coverAway} /> : null}
+              {/* The fade: the cover melts into the page colour, so the name and numbers sit on it. */}
+              <LinearGradient colors={[colors.bg + '00', colors.bg + 'CC', colors.bg]} locations={[0.3, 0.72, 1]} style={StyleSheet.absoluteFill} />
+            </View>
+            <View style={{ height: COVER_SPACE }} />
+            {/* Name row: @username and the three numbers on the left, big picture on the right, all sitting on the cover's fade. */}
+            <View style={styles.idRow}>
+              <View style={styles.idLeft}>
+                <Text style={[styles.handle, { color: colors.subtext }]} numberOfLines={1}>@{profile?.username || 'unknown'}</Text>
+                <View style={styles.statsRow}>
+                  <TouchableOpacity onPress={openFollowing} activeOpacity={0.7}>
+                    <Text style={[styles.statNum, { color: colors.text }]}>{fmtCount(profile?.following_count)}</Text>
+                    <Text style={[styles.statLabel, { color: colors.subtext }]}>Following</Text>
+                  </TouchableOpacity>
+                  <View>
+                    <Text style={[styles.statNum, { color: colors.text }]}>{fmtCount(profile?.followers_count)}</Text>
+                    <Text style={[styles.statLabel, { color: colors.subtext }]}>Followers</Text>
+                  </View>
+                  <View>
+                    <Text style={[styles.statNum, { color: colors.text }]}>{fmtCount(totalLikes ?? posts.reduce((n: number, p: any) => n + (p.likes_count || 0), 0))}</Text>
+                    <Text style={[styles.statLabel, { color: colors.subtext }]}>Likes</Text>
+                  </View>
+                </View>
+              </View>
+              <TouchableOpacity activeOpacity={0.9} onPress={() => (ringFor(profile?.id || id as any) ? router.push(`/moment/${profile?.id || id}`) : profile?.avatar_url && setViewAvatar(true))} style={[styles.avatarBig, { borderColor: colors.bg }]}>
+                <RingAvatar userId={profile?.id || (id as any)} uri={profile?.avatar_url} size={AVATAR_BIG} noTap />
               </TouchableOpacity>
             </View>
             {!isMe && (
@@ -366,8 +481,20 @@ export default function UserProfileScreen() {
                 <TouchableOpacity style={[styles.messageButton, { borderColor: colors.primary }]} onPress={startConversation}>
                   <Text style={[styles.messageText, { color: colors.primary }]}>Message</Text>
                 </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.bellButton, { borderColor: bellOn ? colors.primary : colors.border }, bellOn && { backgroundColor: colors.primary + '22' }]}
+                  onPress={toggleBell}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <Ionicons name={bellOn ? 'notifications' : 'notifications-outline'} size={20} color={bellOn ? colors.primary : colors.text} />
+                </TouchableOpacity>
               </View>
             )}
+            <TouchableOpacity activeOpacity={0.7} onPress={() => setNameInfoOpen(true)} style={styles.nameRow}>
+              <Text style={[styles.name, { color: colors.text }]} numberOfLines={1}>{profile?.display_name || 'No name set'}</Text>
+              <VerifiedBadge verified={profile?.verified} isAuthentic={profile?.is_authentic} plan={profile?.verified_plan} size={16} />
+            </TouchableOpacity>
+            {profile?.bio ? <Text style={[styles.bio, { color: colors.text }]}>{profile.bio}</Text> : null}
 
             {!isLocked && (
               <View style={[styles.tabRow, { borderColor: colors.border }]}>
@@ -409,17 +536,6 @@ export default function UserProfileScreen() {
           to scroll, same as the system status bar itself is always
           there. */}
       <StatusBarScrim />
-
-      {/* Big avatar + name: static at their resting spot, just fade out
-          together — no transform math to get wrong. */}
-      <Animated.View style={[styles.floatingBig, { opacity: bigOpacity }]} pointerEvents="none">
-        <Avatar uri={profile?.avatar_url} size={96} />
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 }}>
-          <Text style={[styles.name, { color: colors.text }]}>{profile?.display_name || 'No name set'}</Text>
-          <VerifiedBadge verified={profile?.verified} isAuthentic={profile?.is_authentic} plan={profile?.verified_plan} size={16} />
-        </View>
-        <Text style={[styles.username, { color: colors.subtext }]}>@{profile?.username || 'unknown'}</Text>
-      </Animated.View>
 
       {/* Invisible measuring copy: identical content, laid out completely
           normally (no animated parent, no BlurView) so its onLayout width
@@ -471,13 +587,22 @@ export default function UserProfileScreen() {
           </TouchableOpacity>
         )}
         {isMe && (
-          <TouchableOpacity style={[styles.topOverlayBtn, { backgroundColor: colors.card }]} onPress={() => router.push('/edit-profile')}>
-            <Ionicons name="pencil" size={18} color={colors.text} />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity style={[styles.topOverlayBtn, { backgroundColor: colors.card }]} onPress={() => setQrOpen(true)}>
+              <Ionicons name="qr-code-outline" size={19} color={colors.text} />
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.topOverlayBtn, { backgroundColor: colors.card }]} onPress={() => router.push('/edit-profile')}>
+              <Ionicons name="pencil" size={18} color={colors.text} />
+            </TouchableOpacity>
+          </View>
         )}
       </View>
 
       <ActionSheet visible={menuOpen} title={profile?.display_name} options={profileMenuOptions} onClose={() => setMenuOpen(false)} />
+      <ImageViewer uri={viewAvatar ? profile?.avatar_url : null} onClose={() => setViewAvatar(false)} />
+      <NameInfoModal visible={nameInfoOpen} profile={profile} onClose={() => setNameInfoOpen(false)} />
+      <ProfileQRModal visible={qrOpen} profile={profile} onClose={() => setQrOpen(false)} />
+      {!!profile?.username && <ShareLinkSheet visible={shareProfileOpen} url={profileLink(profile.username)} title="Share profile" userId={session?.user?.id} onClose={() => setShareProfileOpen(false)} />}
       <ReportModal visible={reportOpen} onClose={() => setReportOpen(false)} onSubmit={submitUserReport} />
     </View>
   );
@@ -485,19 +610,25 @@ export default function UserProfileScreen() {
 
 const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { alignItems: 'center', paddingTop: 50, paddingBottom: 0, borderBottomWidth: 0 },
-  name: { fontSize: 20, fontWeight: '800', marginTop: 12 },
+  header: { paddingTop: 0, borderBottomWidth: 0 },
+  idRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', paddingHorizontal: 18 },
+  idLeft: { flex: 1, paddingRight: 12, paddingBottom: 8 },
+  handle: { fontSize: 16, fontWeight: '500', marginBottom: 10 },
+  statsRow: { flexDirection: 'row', gap: 16 },
+  statNum: { fontSize: 21, fontWeight: '800' },
+  statLabel: { fontSize: 13, marginTop: 1 },
+  avatarBig: { borderWidth: 3, borderRadius: 60, marginLeft: 8 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, marginTop: 14 },
+  name: { fontSize: 18, fontWeight: '800', flexShrink: 1 },
   username: { fontSize: 15, marginTop: 2 },
-  bio: { fontSize: 14, marginTop: 10, textAlign: 'center', paddingHorizontal: 30 },
-  statsRow: { flexDirection: 'row', gap: 24, marginTop: 16 },
-  stat: { fontSize: 14 },
-  statNum: { fontWeight: '700' },
-  buttonRow: { flexDirection: 'row', gap: 10, marginTop: 20 },
-  followButton: { borderRadius: 20, paddingVertical: 10, paddingHorizontal: 28, justifyContent: 'center', alignItems: 'center' },
-  followText: { color: '#fff', fontWeight: '700' },
-  messageButton: { borderWidth: 1, borderRadius: 20, paddingVertical: 10, paddingHorizontal: 24, justifyContent: 'center', alignItems: 'center' },
-  messageText: { fontWeight: '700' },
-  tabRow: { flexDirection: 'row', marginTop: 24, width: '100%', borderBottomWidth: 1 },
+  bio: { fontSize: 14, marginTop: 4, paddingHorizontal: 18, lineHeight: 20 },
+  buttonRow: { flexDirection: 'row', gap: 8, marginTop: 16, paddingHorizontal: 18 },
+  followButton: { flex: 1, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
+  followText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  bellButton: { borderWidth: 1, width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
+  messageButton: { flex: 1, height: 44, borderRadius: 22, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
+  messageText: { fontWeight: '800', fontSize: 15 },
+  tabRow: { flexDirection: 'row', marginTop: 20, width: '100%', borderBottomWidth: 1 },
   tabBtn: { flex: 1, alignItems: 'center', paddingBottom: 12 },
   tabText: { fontSize: 14 },
   tabUnderline: { height: 2.5, width: 40, borderRadius: 2, marginTop: 8 },
@@ -515,9 +646,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   topOverlayBtn: { width: 38, height: 38, borderRadius: 19, justifyContent: 'center', alignItems: 'center' },
+  cover: { position: 'absolute', top: 0, left: 0, right: 0, height: 285, overflow: 'hidden' },
+  avatarRing: { padding: 3, borderRadius: 60 },
   floatingBig: {
     position: 'absolute',
-    top: 78,
+    top: 75,
     left: 0,
     right: 0,
     alignItems: 'center',
