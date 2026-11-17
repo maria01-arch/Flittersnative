@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View, Image, PixelRatio, StyleSheet, TouchableOpacity, Pressable, Modal, useWindowDimensions, Alert } from 'react-native';
 import Text from '@/components/AppText';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -229,6 +229,8 @@ export default function PostCard({
   onRepost,
   onQuote,
   onDelete,
+  pinned = false,
+  onPin,
 }: {
   post: any;
   currentUserId?: string;
@@ -252,6 +254,9 @@ export default function PostCard({
   // doesn't pass this, the repost button just toggles a plain repost.
   onQuote?: (post: any, text: string) => Promise<void>;
   onDelete?: (post: any) => void;
+  // Profile only: show the "Pinned" label and a pin button on your own posts.
+  pinned?: boolean;
+  onPin?: (post: any) => void;
 }) {
   const { width: windowWidth } = useWindowDimensions();
   const { colors } = useTheme();
@@ -261,6 +266,16 @@ export default function PostCard({
   const [repostSheetOpen, setRepostSheetOpen] = useState(false);
   const [quoteOpen, setQuoteOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  // Sheets and modals are only created the first time they are opened. Before,
+  // every post in the feed carried six of them, mounted and idle.
+  const everOpened = useRef({ img: false, del: false, rep: false, quote: false, share: false, report: false });
+  if (fullscreenImage) everOpened.current.img = true;
+  if (deleteSheetOpen) everOpened.current.del = true;
+  if (repostSheetOpen) everOpened.current.rep = true;
+  if (quoteOpen) everOpened.current.quote = true;
+  if (shareOpen) everOpened.current.share = true;
+  if (reportOpen) everOpened.current.report = true;
+  const mounted = everOpened.current;
   // Save for offline reading (bookmark under the post).
   const [saved, setSaved] = useState(false);
   useEffect(() => {
@@ -400,9 +415,16 @@ export default function PostCard({
             <VerifiedBadge verified={post.author?.verified} isAuthentic={post.author?.is_authentic} plan={post.author?.verified_plan} size={post.isRepost ? 12 : 13} />
           </TouchableOpacity>
           {isMine ? (
-            <TouchableOpacity onPress={() => setDeleteSheetOpen(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="trash-outline" size={16} color={colors.faint} />
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+              {onPin && !post.isRepost ? (
+                <TouchableOpacity onPress={() => onPin(post)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name={pinned ? 'pin' : 'pin-outline'} size={16} color={pinned ? colors.primary : colors.faint} />
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity onPress={() => setDeleteSheetOpen(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="trash-outline" size={16} color={colors.faint} />
+              </TouchableOpacity>
+            </View>
           ) : (
             <TouchableOpacity onPress={() => setReportOpen(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <Ionicons name="flag-outline" size={16} color={colors.faint} />
@@ -410,6 +432,12 @@ export default function PostCard({
           )}
         </View>
         {!post.isRepost && <Text style={[styles.username, { color: colors.subtext }]}>@{post.author?.username || 'unknown'} · {postTime(post.created_at)}</Text>}
+        {pinned && !post.isRepost ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+            <Ionicons name="pin" size={12} color={colors.primary} />
+            <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '700' }}>Pinned</Text>
+          </View>
+        ) : null}
           {!post.isRepost && isCoowner && (
             <TouchableOpacity onPress={leaveCoown} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
               <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '700', marginTop: 2 }}>Remove me as co-owner</Text>
@@ -492,17 +520,17 @@ export default function PostCard({
         <View style={{ flex: 1 }}>{cardInner}</View>
       )}
 
-      {post.image_url && (
+      {post.image_url && mounted.img && (
         <ImageViewer uri={fullscreenImage ? post.image_url : null} onClose={() => setFullscreenImage(false)} />
       )}
 
-      <ActionSheet
+      {mounted.del && <ActionSheet
         visible={deleteSheetOpen}
         title="Delete post?"
         onClose={() => setDeleteSheetOpen(false)}
         options={[{ label: "Delete — this can't be undone", icon: 'trash-outline', destructive: true, onPress: doDelete }]}
-      />
-      <ActionSheet
+      />}
+      {mounted.rep && <ActionSheet
         visible={repostSheetOpen}
         onClose={() => setRepostSheetOpen(false)}
         options={
@@ -513,8 +541,8 @@ export default function PostCard({
                 { label: 'Quote', icon: 'create-outline', onPress: () => setQuoteOpen(true) },
               ]
         }
-      />
-      <QuoteModal
+      />}
+      {mounted.quote && <QuoteModal
         visible={quoteOpen}
         post={post}
         onClose={() => setQuoteOpen(false)}
@@ -522,9 +550,9 @@ export default function PostCard({
           if (onQuote) await onQuote(post, text);
           setQuoteOpen(false);
         }}
-      />
-      <ShareLinkSheet visible={shareOpen} url={postLink(post.id)} title="Share post" userId={currentUserId} videoUrl={post.video_url} imageUrl={post.image_url} post={post} onClose={() => setShareOpen(false)} />
-      <ReportModal visible={reportOpen} onClose={() => setReportOpen(false)} onSubmit={submitReport} />
+      />}
+      {mounted.share && <ShareLinkSheet visible={shareOpen} url={postLink(post.id)} title="Share post" userId={currentUserId} videoUrl={post.video_url} imageUrl={post.image_url} post={post} onClose={() => setShareOpen(false)} />}
+      {mounted.report && <ReportModal visible={reportOpen} onClose={() => setReportOpen(false)} onSubmit={submitReport} />}
     </View>
   );
 }

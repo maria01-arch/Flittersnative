@@ -27,6 +27,15 @@ try {
   hasMediaLibrary = false;
 }
 
+// Voice calls. Added to the build only once the package is installed (see CALLS_SETUP.md).
+let hasWebRTC = false;
+try {
+  require.resolve('@config-plugins/react-native-webrtc/package.json');
+  hasWebRTC = true;
+} catch (e) {
+  hasWebRTC = false;
+}
+
 module.exports = {
   expo: {
     name: "Flitters",
@@ -85,8 +94,11 @@ module.exports = {
       // throws a SecurityException instead of showing the notification.
       // It's a normal-protection permission with no Play Console
       // declaration needed, so leaving it in costs nothing.
+      //
+      // FOREGROUND_SERVICE is now ALLOWED (it used to be blocked here): voice calls need it so the
+      // microphone keeps working when the app is in the background (the "call in progress"
+      // notification). Only the microphone type is declared (see modules/flitters-call).
       blockedPermissions: [
-        "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.RECEIVE_BOOT_COMPLETED",
@@ -151,9 +163,10 @@ module.exports = {
           icon: "./assets/images/flitters-logo.png",
           color: "#3DA9FF",
           // The Flitters notification sound (needs a new EAS build to take effect).
-          sounds: ["./assets/sounds/flit.wav"]
+          sounds: ["./assets/sounds/flit.wav", "./assets/sounds/ringtone.wav"]
         }
       ],
+      ...(hasWebRTC ? [["@config-plugins/react-native-webrtc", { microphonePermission: "Flitters uses the microphone for voice calls." }]] : []),
       [
         "expo-audio",
         {

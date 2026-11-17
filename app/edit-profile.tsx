@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { hasLiveCoverReward } from '@/lib/streaks';
 import { View, TextInput, TouchableOpacity, Image, StyleSheet, ActivityIndicator, ScrollView, Alert } from 'react-native';
 import Text from '@/components/AppText';
 import { router } from 'expo-router';
@@ -32,6 +33,8 @@ export default function EditProfileScreen() {
   const [newCoverVideoUri, setNewCoverVideoUri] = useState<string | null>(null);
   const [removeLive, setRemoveLive] = useState(false);
   const [isBlue, setIsBlue] = useState(false);
+  const [streakUnlocked, setStreakUnlocked] = useState(false);
+  const canLive = isBlue || streakUnlocked;
   const [trimmer, setTrimmer] = useState<{ uri: string; duration: number | null } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -48,6 +51,7 @@ export default function EditProfileScreen() {
         setCoverVideoUrl(data.cover_video_url || null);
         setIsBlue(!!(data.verified || data.is_authentic));
       }
+      hasLiveCoverReward(session.user.id).then(setStreakUnlocked);
       setLoading(false);
     });
   }, [session]);
@@ -69,9 +73,10 @@ export default function EditProfileScreen() {
   };
 
   const pickLiveCover = async () => {
-    if (!isBlue) {
-      Alert.alert('Blue badge only', 'A live cover is a feature of verified accounts.', [
+    if (!canLive) {
+      Alert.alert('Live cover', 'A live cover is for verified accounts, or anyone who keeps a 30-day chat streak without missing a day.', [
         { text: 'Not now', style: 'cancel' },
+        { text: 'See streaks', onPress: () => router.push('/streaks' as any) },
         { text: 'Get verified', onPress: () => router.push('/get-verified') },
       ]);
       return;
@@ -178,7 +183,7 @@ export default function EditProfileScreen() {
       <View style={{ marginHorizontal: 16, marginTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <TouchableOpacity onPress={pickLiveCover} activeOpacity={0.8}>
           <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 14 }}>
-            {newCoverVideoUri || (coverVideoUrl && !removeLive) ? 'Change live cover' : isBlue ? 'Add live cover (up to 6s)' : 'Add live cover (blue badge)'}
+            {newCoverVideoUri || (coverVideoUrl && !removeLive) ? 'Change live cover' : canLive ? 'Add live cover (up to 6s)' : 'Add live cover (blue badge or 30-day streak)'}
           </Text>
         </TouchableOpacity>
         {newCoverVideoUri || (coverVideoUrl && !removeLive) ? (

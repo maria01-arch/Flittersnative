@@ -11,10 +11,15 @@ import { useClipboardImage } from '@/lib/clipboardImage';
 import PasteImageChip from '@/components/PasteImageChip';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { fetchStreaks, streakHint, REWARD_DAYS, type Streak } from '@/lib/streaks';
+import StreakFlame from '@/components/StreakFlame';
+import { startOutgoing } from '@/lib/calls/callManager';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '@/lib/supabase';
+import { sendInbox } from '@/lib/inboxPing';
 import { useAuth } from '@/lib/AuthContext';
 import { useInbox } from '@/lib/InboxContext';
 import { useTheme } from '@/lib/ThemeContext';
@@ -240,6 +245,36 @@ export default function ConversationScreen() {
   const [trimmer, setTrimmer] = useState<{ uri: string; duration: number | null; max: number } | null>(null);
   const [voicePreview, setVoicePreview] = useState<{ uri: string; duration: number; waveform?: string } | null>(null);
   const [otherProfile, setOtherProfile] = useState<any>(null);
+  const [streak, setStreak] = useState<Streak | null>(null);
+  // Voice call: asks the server to ring them, then opens the call screen.
+  const startVoiceCall = async () => {
+    if (!otherId) return;
+    const r = await startOutgoing(
+      { id: String(otherId), name: otherProfile?.display_name || (name as string) || 'Chat', avatar: otherProfile?.avatar_url || (otherAvatar as string) || null },
+      String(id)
+    );
+    if (!r.ok) Alert.alert('Call', r.message || "Couldn't start the call.");
+    else router.push('/call' as any);
+  };
+  useEffect(() => {
+    let alive = true;
+    const pull = () => fetchStreaks(String(id)).then((r) => {
+      if (!alive) return;
+      setStreak(r[0] || null);
+      // First time this chat reaches 30 days: tell them about the reward, once.
+      if (r[0] && r[0].streak >= REWARD_DAYS) {
+        const key = `streak_reward_told_${id}`;
+        AsyncStorage.getItem(key).then((v) => {
+          if (v) return;
+          AsyncStorage.setItem(key, '1').catch(() => {});
+          Alert.alert('30-day streak! 🔥', 'You unlocked a live cover photo. Add it any time in Edit profile.');
+        }).catch(() => {});
+      }
+    });
+    pull();
+    const t = setInterval(pull, 60000);
+    return () => { alive = false; clearInterval(t); };
+  }, [id]);
   const [showStickerTray, setShowStickerTray] = useState(false);
 
   useEffect(() => {
@@ -703,7 +738,7 @@ export default function ConversationScreen() {
     if (otherId) {
       // The ping carries the message itself, so the other person's chat list
       // can update straight away without re-downloading everything.
-      supabase.channel(`inbox_${otherId}`).send({
+      sendInbox(otherId, {
         type: 'broadcast',
         event: 'ping',
         payload: {
@@ -1217,15 +1252,23 @@ export default function ConversationScreen() {
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <Text style={[styles.topBarTitle, { color: colors.text }]}>{otherProfile?.display_name || name || 'Chat'}</Text>
               <VerifiedBadge verified={otherProfile?.verified} isAuthentic={otherProfile?.is_authentic} plan={otherProfile?.verified_plan} size={12} />
+              {streak ? <StreakFlame days={streak.streak} atRisk={streak.at_risk && !streak.me_today} /> : null}
             </View>
             <Text style={[styles.statusText, { color: isOtherTyping ? colors.primary : colors.subtext }]}>
               {isOtherTyping ? 'typing...' : isOtherOnline ? 'Active now' : lastSeenVisible && otherProfile?.last_seen_at ? `last seen ${lastSeenText(otherProfile.last_seen_at)}` : ''}
             </Text>
           </View>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => setTopMenuOpen(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Ionicons name="ellipsis-vertical" size={22} color={colors.text} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18 }}>
+          {otherId ? (
+            <TouchableOpacity onPress={startVoiceCall} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Ionicons name="call-outline" size={22} color={colors.text} />
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity onPress={() => setTopMenuOpen(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Ionicons name="ellipsis-vertical" size={22} color={colors.text} />
+          </TouchableOpacity>
+        </View>
       </View>
       <TopMenu
         visible={topMenuOpen}

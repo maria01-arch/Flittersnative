@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView, Switch, Modal, Alert, Pressable, Linking, TextInput } from 'react-native';
 import Text from '@/components/AppText';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
+import { fetchHealth } from '@/lib/health';
 import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
 import { usePreferences, FeedInterest, BrowserEngine } from '@/lib/PreferencesContext';
@@ -120,6 +121,17 @@ export default function SettingsScreen() {
   useEffect(() => {
     if (section === 'privacy') setPrivacyOpen(true);
   }, [section]);
+  // The creator dashboard can switch professional mode off too, so re-read it
+  // whenever this screen comes back into view.
+  const [health, setHealth] = useState<{ standing: string; unread: number } | null>(null);
+  useFocusEffect(useCallback(() => {
+    const uid = session?.user?.id;
+    if (!uid) return;
+    fetchHealth().then((r) => { if (r.data) setHealth({ standing: r.data.standing, unread: r.data.unread_alerts }); });
+    supabase.from('profiles').select('is_professional').eq('id', uid).single().then(({ data }) => {
+      if (data) setProfile((p: any) => (p ? { ...p, is_professional: (data as any).is_professional } : p));
+    }, () => {});
+  }, [session?.user?.id]));
   const [moderationOpen, setModerationOpen] = useState(false);
   const [requestsOpen, setRequestsOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
@@ -324,6 +336,33 @@ export default function SettingsScreen() {
           <SettingsRow colors={colors} icon="person-outline" label="Account" onPress={() => router.push('/edit-profile')} />
           <SettingsRow colors={colors} icon="lock-closed-outline" label="Privacy and security" onPress={() => setPrivacyOpen(true)} />
           <SettingsRow colors={colors} icon="shield-outline" label="Moderation and content filters" onPress={() => setModerationOpen(true)} />
+          <View style={[styles.row, { borderBottomColor: colors.border }]}>
+            <Ionicons name="briefcase-outline" size={20} color={colors.text} />
+            <Text style={[styles.rowText, { color: colors.text }]}>Professional mode</Text>
+            <Switch
+              value={!!profile?.is_professional}
+              onValueChange={(v) => {
+                // Turning it ON goes through the setup screen (pick a category,
+                // then it is switched on there). Turning it OFF asks first.
+                if (v) { router.push('/creator'); return; }
+                Alert.alert('Turn off professional mode?', 'Your dashboard is hidden. Your posts and numbers are kept, and you can turn it back on any time.', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Turn off', style: 'destructive', onPress: () => updateProfileField('is_professional', false) },
+                ]);
+              }}
+              trackColor={{ true: colors.primary }}
+            />
+          </View>
+          {profile?.is_professional ? (
+            <SettingsRow colors={colors} icon="stats-chart-outline" label="Creator dashboard" onPress={() => router.push('/creator')} />
+          ) : null}
+          <SettingsRow
+            colors={colors}
+            icon="pulse-outline"
+            label="Account health"
+            value={health ? (health.unread > 0 ? `${health.unread} new` : health.standing === 'good' ? 'Good' : 'Issue') : undefined}
+            onPress={() => router.push('/account-health')}
+          />
           <SettingsRow colors={colors} icon="shield-checkmark-outline" label="Get verified" onPress={() => router.push('/get-verified')} />
           <SettingsRow colors={colors} icon="notifications-outline" label="Notifications" onPress={() => setNotifOpen(true)} />
           <SettingsRow colors={colors} icon="image-outline" label="Content and media" onPress={() => setContentOpen(true)} />
@@ -331,7 +370,8 @@ export default function SettingsScreen() {
           <SettingsRow colors={colors} icon="link-outline" label="Links and Preview" onPress={() => setLinksOpen(true)} />
           <SettingsRow colors={colors} icon="language-outline" label="Languages" onPress={() => comingSoon('Languages')} />
           <SettingsRow colors={colors} icon="flask-outline" label="Beta features" onPress={() => comingSoon('Beta features')} />
-          <SettingsRow colors={colors} icon="help-circle-outline" label="Help" onPress={() => comingSoon('Help')} />
+          <SettingsRow colors={colors} icon="flame-outline" label="Chat streaks" onPress={() => router.push('/streaks' as any)} />
+          <SettingsRow colors={colors} icon="help-circle-outline" label="Help center" onPress={() => router.push('/help')} />
           <SettingsRow colors={colors} icon="information-circle-outline" label="About" onPress={() => setAboutOpen(true)} />
           <SettingsRow colors={colors} icon="swap-horizontal-outline" label="Switch account" onPress={() => router.push('/switch-account')} />
           <SettingsRow colors={colors} icon="log-out-outline" label="Sign Out" onPress={handleSignOut} danger />
@@ -350,6 +390,7 @@ export default function SettingsScreen() {
             <Text style={[styles.title, { color: colors.text }]}>Appearance</Text>
             <View style={{ width: 24 }} />
           </View>
+          <SettingsRow colors={colors} icon="color-palette-outline" label="App theme" onPress={() => { setAppearanceOpen(false); router.push('/app-theme' as any); }} />
           <SettingsRow colors={colors} icon="chatbubbles-outline" label="Chat theme" onPress={() => setThemeOpen(true)} />
           <View style={styles.section}>
             <Text style={[styles.sectionLabel, { color: colors.subtext }]}>Theme</Text>

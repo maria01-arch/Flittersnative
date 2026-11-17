@@ -45,6 +45,18 @@ function findFlit(node: any, depth = 0): any {
 
 async function present(N: any, payload: any) {
   const { __flit, ...rest } = payload;
+  // "That call is over": take its ringing notification away.
+  if (__flit.dismissCallId) {
+    try {
+      const shown: any[] = await N.getPresentedNotificationsAsync();
+      await Promise.all(
+        shown
+          .filter((n) => n?.request?.content?.data?.callId === __flit.dismissCallId)
+          .map((n) => N.dismissNotificationAsync(n.request.identifier).catch(() => {}))
+      );
+    } catch {}
+    return;
+  }
   const d: any = rest;
   // Don't pop up a banner for the chat you are looking at right now.
   if (d.type === 'message' && isViewingConversation(d.conversationId)) return;

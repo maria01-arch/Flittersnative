@@ -7,7 +7,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
 import PostCard from '@/components/PostCard';
-import { applyCounts, fetchMyFlags, notifyOnce, coownersEmbed } from '@/lib/postActions';
+import { applyCounts, fetchMyFlags, coownersEmbed } from '@/lib/postActions';
 
 // Posts that contain #tag, newest first. Likes work here; to repost, quote or
 // comment, open the post.
@@ -41,11 +41,12 @@ export default function HashtagScreen() {
   const toggleLike = async (post: any) => {
     if (!session?.user?.id) return;
     setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, liked_by_me: !p.liked_by_me, likes_count: p.liked_by_me ? p.likes_count - 1 : p.likes_count + 1 } : p)));
-    if (post.liked_by_me) {
-      await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', session.user.id);
-    } else {
-      await supabase.from('likes').insert({ post_id: post.id, user_id: session.user.id });
-      await notifyOnce({ userId: post.user_id, actorId: session.user.id, type: 'like', postId: post.id });
+    const { error } = post.liked_by_me
+      ? await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', session.user.id)
+      : await supabase.from('likes').insert({ post_id: post.id, user_id: session.user.id });
+    if (error && !/duplicate/i.test(error.message)) {
+      // Not saved: put the heart and the count back.
+      setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, liked_by_me: post.liked_by_me, likes_count: post.likes_count } : p)));
     }
   };
 

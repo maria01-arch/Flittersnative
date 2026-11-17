@@ -1,5 +1,6 @@
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { supabase } from '@/lib/supabase';
+import { sendInbox } from '@/lib/inboxPing';
 import { uploadImage } from '@/lib/upload';
 import { canPerform, permissionDeniedMessage } from '@/lib/permissions';
 
@@ -73,6 +74,6 @@ export async function sendMomentReply(opts: {
     reply_to: momentMark(ownerId, moment.id),
   });
   if (error) return { ok: false, message: "Couldn't send. Try again." };
-  supabase.channel(`inbox_${ownerId}`).send({ type: 'broadcast', event: 'ping', payload: {} });
+  sendInbox(ownerId, { type: 'broadcast', event: 'ping', payload: {} });
   return { ok: true };
 }

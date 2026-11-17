@@ -9,6 +9,7 @@ import { isViewingConversation, isViewingGroup, dismissActiveChatNotifications }
 import { useAppForeground } from './useAppForeground';
 import { switchToAccount } from './accounts';
 import { performNotificationAction } from './notificationButtons';
+import { checkForRingingCall } from './calls/callManager';
 // Registers the closed-app notification task (see lib/pushTask.ts).
 import './pushTask';
 
@@ -55,9 +56,11 @@ if (!isExpoGo) {
         const alreadyViewing =
           (data?.type === 'message' && isViewingConversation(data?.conversationId)) ||
           (data?.type === 'group_message' && isViewingGroup(data?.groupId));
+        // A ringing call while the app is open is shown by the call screen itself.
+        const inApp = data?.type === 'incoming_call';
         return {
-          shouldShowAlert: !alreadyViewing,
-          shouldPlaySound: !alreadyViewing,
+          shouldShowAlert: !alreadyViewing && !inApp,
+          shouldPlaySound: !alreadyViewing && !inApp,
           shouldSetBadge: false,
         };
       },
@@ -155,6 +158,18 @@ async function registerToken(userId: string): Promise<string | null> {
     // The Flitters channel: same as above but with the app's own soft sound.
     // (A channel's sound can't be changed once it exists, so this is a new
     // channel; the push function sends to it by this name.)
+    // Incoming calls: loud, with the call ringtone and a long vibration.
+    try {
+      await Notifications.setNotificationChannelAsync('calls', {
+        name: 'Calls',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 700, 500, 700, 500, 700],
+        sound: 'ringtone.wav',
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      });
+    } catch (err) {
+      console.warn('[Push] could not create the Calls channel:', err);
+    }
     try {
       await Notifications.setNotificationChannelAsync('flitters', {
         name: 'Flitters',
@@ -241,6 +256,16 @@ async function handleNotificationTap(data: any) {
     }
   }
   console.log('[Push] handling tap, data:', JSON.stringify(data));
+  if (data.type === 'incoming_call') {
+    // Open the call screen if it is still ringing.
+    const ringing = await checkForRingingCall();
+    if (!ringing) router.push('/(tabs)/messages');
+    return;
+  }
+  if (data.type === 'missed_call' && data.conversationId) {
+    router.push({ pathname: '/conversation/[id]', params: { id: data.conversationId, name: data.otherName || 'Chat', otherId: data.otherId, otherAvatar: data.otherAvatar || '' } });
+    return;
+  }
   if (data.type === 'message' && data.conversationId) {
     router.push({
       pathname: '/conversation/[id]',

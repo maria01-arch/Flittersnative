@@ -134,19 +134,33 @@ export default function PostDetailScreen() {
     load();
   }, [id]);
 
+  // Opening a post counts as a view for the creator's stats (once per person
+  // per post; the feed already does the same). Your own posts don't count.
+  const viewLogged = useRef<string | null>(null);
+  useEffect(() => {
+    const uid = session?.user?.id;
+    if (!uid || !post?.id || post.user_id === uid || viewLogged.current === post.id) return;
+    viewLogged.current = post.id;
+    supabase.from('post_views').upsert({ user_id: uid, post_id: String(post.id), seen_at: new Date().toISOString() }, { onConflict: 'user_id,post_id' }).then(() => {}, () => {});
+  }, [post?.id, post?.user_id, session?.user?.id]);
+
   const toggleLike = async () => {
     if (!session?.user?.id || !post || mutationInFlight.current) return;
     mutationInFlight.current = true;
     const wasLiked = post.liked_by_me;
     setPost((p: any) => ({ ...p, liked_by_me: !wasLiked, likes_count: wasLiked ? p.likes_count - 1 : p.likes_count + 1 }));
     if (!wasLiked) playSound('like');
-    if (wasLiked) {
-      await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', session.user.id);
-    } else {
-      await supabase.from('likes').insert({ post_id: post.id, user_id: session.user.id });
-      await notifyOnce({ userId: post.user_id, actorId: session.user.id, type: 'like', postId: post.id });
+    try {
+      const { error } = wasLiked
+        ? await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', session.user.id)
+        : await supabase.from('likes').insert({ post_id: post.id, user_id: session.user.id });
+      if (error && !/duplicate/i.test(error.message)) throw error;
+    } catch {
+      // Not saved: put the heart and the count back.
+      setPost((p: any) => ({ ...p, liked_by_me: wasLiked, likes_count: post.likes_count }));
+    } finally {
+      mutationInFlight.current = false;
     }
-    mutationInFlight.current = false;
   };
 
   const quoteRepost = async (_p: any, text: string) => {
@@ -214,9 +228,7 @@ export default function PostDetailScreen() {
       Alert.alert("Couldn't post", 'Check your connection and try again.');
       return;
     }
-    if (post?.user_id && post.user_id !== session.user.id) {
-      await supabase.from('notifications').insert({ user_id: post.user_id, actor_id: session.user.id, type: 'comment', post_id: id });
-    }
+    // The post owner is notified by the database (notify_on_comment).
     await load();
   };
 
@@ -247,9 +259,7 @@ export default function PostDetailScreen() {
       submitCommentInFlight.current = false;
       return;
     }
-    if (post?.user_id && post.user_id !== session.user.id) {
-      await supabase.from('notifications').insert({ user_id: post.user_id, actor_id: session.user.id, type: 'comment', post_id: id });
-    }
+    // The post owner is notified by the database (notify_on_comment).
     // People tagged with @username in the comment get a notification.
     notifyMentions([text.trim()], String(id), session.user.id, post?.user_id ? [post.user_id] : []).catch(() => {});
     setText('');

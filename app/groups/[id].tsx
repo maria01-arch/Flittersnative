@@ -37,6 +37,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '@/lib/supabase';
+import { sendInbox } from '@/lib/inboxPing';
 import { useAuth } from '@/lib/AuthContext';
 import { useInbox } from '@/lib/InboxContext';
 import { useTheme } from '@/lib/ThemeContext';
@@ -608,7 +609,7 @@ export default function GroupChatScreen() {
       }
       if (memberIdsRef.current.length > 40) return; // big groups: realtime handles it
       memberIdsRef.current.forEach((uid) => {
-        if (uid !== session.user.id) supabase.channel(`inbox_${uid}`).send({ type: 'broadcast', event: 'ping', payload: { kind: 'group', id, msg } });
+        if (uid !== session.user.id) sendInbox(uid, { type: 'broadcast', event: 'ping', payload: { kind: 'group', id, msg } });
       });
     } catch {}
   };

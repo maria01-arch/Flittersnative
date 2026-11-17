@@ -12,6 +12,9 @@ import { getSavedPosts, unsavePost, SavedPost } from '@/lib/savedPosts';
 import LinkifiedText from '@/components/LinkifiedText';
 import Avatar from '@/components/Avatar';
 import VerifiedBadge from '@/components/VerifiedBadge';
+import { fetchSavedAds, setAdSave, SavedAd } from '@/lib/adEngagement';
+import { openLink } from '@/lib/openLink';
+import { usePreferences } from '@/lib/PreferencesContext';
 
 // Posts you saved to read offline. Everything on this page is read from the
 // phone itself, so it opens with no connection.
@@ -22,6 +25,8 @@ export default function SavedPostsScreen() {
   const uid = session?.user?.id;
   const [items, setItems] = useState<SavedPost[]>([]);
   const [ready, setReady] = useState(false);
+  const { browserEngine } = usePreferences();
+  const [savedAds, setSavedAds] = useState<SavedAd[]>([]);
 
   const load = useCallback(() => {
     if (!uid) return;
@@ -29,8 +34,19 @@ export default function SavedPostsScreen() {
       setItems(l);
       setReady(true);
     });
-  }, [uid]);
+    if (online) fetchSavedAds(uid).then(setSavedAds);
+  }, [uid, online]);
   useFocusEffect(load);
+
+  const unsaveAd = async (adId: string) => {
+    if (!uid) return;
+    setSavedAds((l) => l.filter((x) => x.ad?.id !== adId));
+    if (!(await setAdSave(adId, uid, false))) load();
+  };
+  const openAd = (url?: string | null) => {
+    if (!url) return;
+    openLink(/^https?:\/\//i.test(url) ? url : `https://${url}`, browserEngine);
+  };
 
   const remove = (id: string) => {
     if (!uid) return;
@@ -88,8 +104,32 @@ export default function SavedPostsScreen() {
         data={items}
         keyExtractor={(i) => String(i.post.id)}
         renderItem={renderItem}
+        ListHeaderComponent={
+          savedAds.length ? (
+            <View>
+              <Text style={{ color: colors.subtext, fontSize: 12, fontWeight: '800', letterSpacing: 0.5, paddingHorizontal: spacing.lg, paddingTop: 14 }}>SAVED ADS</Text>
+              {savedAds.map((r) => r.ad && (
+                <TouchableOpacity key={r.ad.id} activeOpacity={r.ad.link_url ? 0.7 : 1} onPress={() => openAd(r.ad!.link_url)} style={[styles.row, { borderBottomColor: colors.border }]}>
+                  <Avatar uri={r.ad.advertiser_avatar_url} size={44} />
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.head}>
+                      <Text style={[styles.name, { color: colors.text }]} numberOfLines={1}>{r.ad.advertiser_name || 'Advertiser'}</Text>
+                      <Text style={{ color: '#F7B731', fontSize: 10, fontWeight: '800' }}>SPONSORED</Text>
+                    </View>
+                    {!!r.ad.content && <Text style={{ color: colors.text, fontSize: 15, lineHeight: 21, marginTop: 4 }} numberOfLines={4}>{r.ad.content}</Text>}
+                    {!!r.ad.image_url && <Image source={{ uri: r.ad.image_url }} style={[styles.image, { backgroundColor: colors.border }]} resizeMode="cover" />}
+                  </View>
+                  <TouchableOpacity onPress={() => unsaveAd(r.ad!.id)} hitSlop={10}>
+                    <Ionicons name="bookmark" size={20} color={colors.primary} />
+                  </TouchableOpacity>
+                </TouchableOpacity>
+              ))}
+              {items.length ? <Text style={{ color: colors.subtext, fontSize: 12, fontWeight: '800', letterSpacing: 0.5, paddingHorizontal: spacing.lg, paddingTop: 14 }}>SAVED POSTS</Text> : null}
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
-          ready ? (
+          ready && !savedAds.length ? (
             <View style={{ alignItems: 'center', paddingTop: 80, paddingHorizontal: 32, gap: 8 }}>
               <Ionicons name="bookmark-outline" size={52} color={colors.faint} />
               <Text style={{ color: colors.text, fontSize: 18, fontWeight: '800' }}>Nothing saved yet</Text>

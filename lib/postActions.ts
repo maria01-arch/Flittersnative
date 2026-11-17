@@ -8,6 +8,9 @@ import { canPerform, permissionDeniedMessage } from './permissions';
 // second attempt finds the first and does nothing.
 export async function notifyOnce(n: { userId: string; actorId: string; type: 'like' | 'repost' | 'follow'; postId?: string | null }) {
   if (!n.userId || n.userId === n.actorId) return;
+  // Likes are notified by a database trigger (notify_on_like). Inserting a
+  // second one from here only costs a round trip.
+  if (n.type === 'like') return;
   let existing = supabase.from('notifications').select('id').eq('user_id', n.userId).eq('actor_id', n.actorId).eq('type', n.type);
   existing = n.postId ? existing.eq('post_id', n.postId) : existing.is('post_id', null);
   const { data } = await existing.limit(1);

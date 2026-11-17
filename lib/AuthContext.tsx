@@ -5,6 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import { getApproxPlace, getDeviceName, placeLabel } from './approxLocation';
 import { isAccountSwitchInProgress, upsertStoredAccount } from './accounts';
+import { registerDevice } from './device';
 
 // A simple, honest log of sign-ins — not a remote-session manager. We
 // don't have a backend beyond Supabase's own client SDK, so there's no
@@ -212,6 +213,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       listener.subscription.unsubscribe();
     };
   }, []);
+
+  // Tell the server which phone this account is on (keeps chat streaks fair).
+  const uid = session?.user?.id;
+  useEffect(() => {
+    if (uid) registerDevice();
+  }, [uid]);
 
   return (
     <AuthContext.Provider value={{ session, initializing }}>

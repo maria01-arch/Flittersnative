@@ -293,16 +293,30 @@ export default function ReelsScreen() {
         r.id === reel.id ? { ...r, liked_by_me: !wasLiked, likes_count: Math.max(0, (r.likes_count || 0) + (wasLiked ? -1 : 1)) } : r
       )
     );
-    if (wasLiked) {
-      // Remove the like wherever it was left (the reel and/or its post).
-      await supabase.from('reel_likes').delete().eq('reel_id', reel.id).eq('user_id', me);
-      if (reel.post_id) await supabase.from('likes').delete().eq('post_id', reel.post_id).eq('user_id', me);
-    } else if (reel.post_id) {
-      // A video post's likes live on the post, so they show in the feed too.
-      await supabase.from('likes').insert({ post_id: reel.post_id, user_id: me });
-      await notifyOnce({ userId: reel.user_id, actorId: me, type: 'like', postId: reel.post_id });
-    } else {
-      await supabase.from('reel_likes').insert({ reel_id: reel.id, user_id: me });
+    try {
+      let failed: any = null;
+      if (wasLiked) {
+        // Remove the like wherever it was left (the reel and/or its post).
+        const r1 = await supabase.from('reel_likes').delete().eq('reel_id', reel.id).eq('user_id', me);
+        const r2 = reel.post_id ? await supabase.from('likes').delete().eq('post_id', reel.post_id).eq('user_id', me) : { error: null };
+        failed = r1.error || r2.error;
+      } else if (reel.post_id) {
+        // A video post's likes live on the post, so they show in the feed too.
+        const r = await supabase.from('likes').insert({ post_id: reel.post_id, user_id: me });
+        failed = r.error && !/duplicate/i.test(r.error.message) ? r.error : null;
+        if (!failed) await notifyOnce({ userId: reel.user_id, actorId: me, type: 'like', postId: reel.post_id });
+      } else {
+        const r = await supabase.from('reel_likes').insert({ reel_id: reel.id, user_id: me });
+        failed = r.error && !/duplicate/i.test(r.error.message) ? r.error : null;
+      }
+      if (failed) throw failed;
+    } catch {
+      // Not saved: put the heart and the count back.
+      setReels((prev) =>
+        prev.map((r) =>
+          r.id === reel.id ? { ...r, liked_by_me: wasLiked, likes_count: Math.max(0, (r.likes_count || 0) + (wasLiked ? 1 : -1)) } : r
+        )
+      );
     }
   };
 

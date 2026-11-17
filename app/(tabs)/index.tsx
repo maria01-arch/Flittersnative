@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { fetchAdEngagement, type AdEng } from '@/lib/adEngagement';
 import { View, StyleSheet, RefreshControl, ActivityIndicator, TouchableOpacity, ScrollView, Animated, Alert } from 'react-native';
 import Text from '@/components/AppText';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -59,8 +60,7 @@ export default function HomeScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [reelsRowVisible, setReelsRowVisible] = useState(true);
-  const onScroll = useHideTabBarOnScroll((y) => setReelsRowVisible(y < 140));
+  const onScroll = useHideTabBarOnScroll();
   const [activeVideoKey, setActiveVideoKey] = useState<string | null>(null);
   // Videos must stop the moment you leave this tab (or open a post/profile
   // on top of it) and pick up again when you come back.
@@ -81,6 +81,7 @@ export default function HomeScreen() {
   const [ads, setAds] = useState<any[]>([]);
   const adsLoadedAt = useRef(0);
   const adsSig = useRef('');
+  const [adEng, setAdEng] = useState<Record<string, AdEng>>({});
   // Reloads the ads, at most once every 2 minutes. The list is only replaced
   // when something really changed, so the feed never jumps or flickers.
   const loadAds = useCallback(async (force?: boolean) => {
@@ -94,6 +95,8 @@ export default function HomeScreen() {
       .order('created_at', { ascending: false })
       .limit(20);
     if (error || !data) return;
+    // Likes / comment counts refresh on every load, even if the ads didn't change.
+    fetchAdEngagement(data.map((a: any) => a.id)).then((m) => { if (Object.keys(m).length) setAdEng(m); });
     const sig = JSON.stringify(data.map((a: any) => [a.id, a.image_url, a.content, a.link_url, a.cta_text, a.advertiser_name, a.advertiser_avatar_url]));
     if (sig === adsSig.current) return;
     adsSig.current = sig;
@@ -148,7 +151,7 @@ export default function HomeScreen() {
       out.push(post);
       if ((i + 1) % 4 === 0) {
         const ad = ads[Math.floor(i / 4) % ads.length];
-        out.push({ __ad: true, ad, feedKey: `ad-${i}-${ad.id}` });
+        out.push({ __ad: true, ad, feedKey: `ad-${Math.floor(i / 4)}-${ad.id}` });
       }
     });
     return out;
@@ -518,13 +521,18 @@ export default function HomeScreen() {
           : p
       )
     );
-    if (post.liked_by_me) {
-      await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', session.user.id);
-    } else {
-      await supabase.from('likes').insert({ post_id: post.id, user_id: session.user.id });
-      await notifyOnce({ userId: post.user_id, actorId: session.user.id, type: 'like', postId: post.id });
+    try {
+      const { error } = post.liked_by_me
+        ? await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', session.user.id)
+        : await supabase.from('likes').insert({ post_id: post.id, user_id: session.user.id });
+      // A repeated like ("duplicate") already is what the person wanted.
+      if (error && !/duplicate/i.test(error.message)) throw error;
+    } catch {
+      // Not saved: put the heart and the count back as they were.
+      setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, liked_by_me: post.liked_by_me, likes_count: post.likes_count } : p)));
+    } finally {
+      likeInFlight.current.delete(post.id);
     }
-    likeInFlight.current.delete(post.id);
   };
 
   const quoteRepost = async (post: any, text: string) => {
@@ -556,13 +564,21 @@ export default function HomeScreen() {
           : p
       )
     );
-    if (post.reposted_by_me) {
-      await supabase.from('reposts').delete().eq('post_id', post.id).eq('user_id', session.user.id);
-    } else {
-      await supabase.from('reposts').insert({ post_id: post.id, user_id: session.user.id });
-      await notifyOnce({ userId: post.user_id, actorId: session.user.id, type: 'repost', postId: post.id });
+    try {
+      const { error } = post.reposted_by_me
+        ? await supabase.from('reposts').delete().eq('post_id', post.id).eq('user_id', session.user.id)
+        : await supabase.from('reposts').insert({ post_id: post.id, user_id: session.user.id });
+      if (error && !/duplicate/i.test(error.message)) throw error;
+      if (!post.reposted_by_me) await notifyOnce({ userId: post.user_id, actorId: session.user.id, type: 'repost', postId: post.id });
+    } catch {
+      // Not saved: bring back the entry and the counts as they were.
+      setPosts((prev) => {
+        const restored = prev.map((p) => (p.id === post.id ? { ...p, reposted_by_me: post.reposted_by_me, reposts_count: post.reposts_count } : p));
+        return post.reposted_by_me && !prev.some((p) => p.feedKey === post.feedKey) ? [post, ...restored] : restored;
+      });
+    } finally {
+      repostInFlight.current.delete(post.id);
     }
-    repostInFlight.current.delete(post.id);
   };
 
   const deletePost = (post: any) => {
@@ -583,7 +599,7 @@ export default function HomeScreen() {
         data={feedData}
         keyExtractor={(item: any) => item.feedKey || item.id}
         renderItem={({ item }: any) => item.__ad ? (
-          <AdCard ad={item.ad} active={tabFocused && item.feedKey === activeVideoKey} />
+          <AdCard ad={item.ad} eng={adEng[item.ad.id]} active={tabFocused && item.feedKey === activeVideoKey} />
         ) : item.pending ? (
           // Still uploading: shown faded and not tappable until it is saved.
           <View style={{ opacity: 0.6 }} pointerEvents="none">
@@ -617,7 +633,7 @@ export default function HomeScreen() {
           )
         }
         onScroll={onScroll}
-        scrollEventThrottle={1}
+        scrollEventThrottle={16}
         onEndReached={loadMore}
         onEndReachedThreshold={0.5}
         ListFooterComponent={loadingMore ? <ActivityIndicator style={{ marginVertical: 16 }} color={colors.primary} /> : null}

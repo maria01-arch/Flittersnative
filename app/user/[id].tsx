@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { hasLiveCoverReward } from '@/lib/streaks';
 import { View, StyleSheet, TouchableOpacity, ActivityIndicator, Animated, Alert, Image } from 'react-native';
 import Text from '@/components/AppText';
 import { BlurView } from 'expo-blur';
@@ -30,6 +31,7 @@ import ShareLinkSheet from '@/components/ShareLinkSheet';
 import { profileLink } from '@/lib/flittersLinks';
 import { sendFollowRequest, cancelFollowRequest, hasPendingRequest } from '@/lib/followRequests';
 import { useScreenSecure } from '@/lib/screenSecure';
+import { pinPost } from '@/lib/creator';
 
 const AnimatedFlatList = Animated.createAnimatedComponent(require('react-native').FlatList);
 
@@ -38,6 +40,16 @@ export default function UserProfileScreen() {
   const { session } = useAuth();
   const { colors, isDark } = useTheme();
   const [profile, setProfile] = useState<any>(null);
+  // A live cover also shows for people who earned it with a 30-day chat streak.
+  const [coverEarned, setCoverEarned] = useState(false);
+  useEffect(() => {
+    setCoverEarned(false);
+    const pid = profile?.id;
+    if (!pid || !profile?.cover_video_url || profile?.verified || profile?.is_authentic) return;
+    let alive = true;
+    hasLiveCoverReward(pid).then((v) => { if (alive) setCoverEarned(v); });
+    return () => { alive = false; };
+  }, [profile?.id, profile?.cover_video_url, profile?.verified, profile?.is_authentic]);
   useEffect(() => onOwnBadgeChanged((uid, patch) => {
     setProfile((p: any) => (p && p.id === uid ? { ...p, ...patch } : p));
   }), []);
@@ -153,7 +165,7 @@ export default function UserProfileScreen() {
   useEffect(() => {
     if (!id) return;
     load();
-  }, [id, session]);
+  }, [id, session?.user?.id]);
 
   useEffect(() => {
     const me = session?.user?.id;
@@ -202,13 +214,18 @@ export default function UserProfileScreen() {
     likeInFlight.current.add(post.id);
     applyLike(posts, setPosts, post);
     applyLike(reposts, setReposts, post);
-    if (post.liked_by_me) {
-      await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', session.user.id);
-    } else {
-      await supabase.from('likes').insert({ post_id: post.id, user_id: session.user.id });
-      await notifyOnce({ userId: post.user_id, actorId: session.user.id, type: 'like', postId: post.id });
+    try {
+      const { error } = post.liked_by_me
+        ? await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', session.user.id)
+        : await supabase.from('likes').insert({ post_id: post.id, user_id: session.user.id });
+      if (error && !/duplicate/i.test(error.message)) throw error;
+    } catch {
+      // Not saved: flip the heart back.
+      applyLike(posts, setPosts, { id: post.id });
+      applyLike(reposts, setReposts, { id: post.id });
+    } finally {
+      likeInFlight.current.delete(post.id);
     }
-    likeInFlight.current.delete(post.id);
   };
 
   const quoteRepost = async (post: any, text: string) => {
@@ -246,6 +263,20 @@ export default function UserProfileScreen() {
 
   const deletePost = (post: any) => {
     setPosts((prev) => prev.filter((p) => p.id !== post.id));
+    // The database clears the pin when its post is deleted; mirror that here.
+    setProfile((p: any) => (p && p.pinned_post_id === post.id ? { ...p, pinned_post_id: null } : p));
+  };
+
+  const togglePin = async (post: any) => {
+    if (!session?.user?.id || session.user.id !== id) return;
+    const next = profile?.pinned_post_id === post.id ? null : post.id;
+    const before = profile?.pinned_post_id ?? null;
+    setProfile((p: any) => (p ? { ...p, pinned_post_id: next } : p));
+    const { error } = await pinPost(session.user.id, next);
+    if (error) {
+      setProfile((p: any) => (p ? { ...p, pinned_post_id: before } : p));
+      Alert.alert("Couldn't pin the post", /pinned_post_id|column/i.test(error.message) ? 'The server is missing the creator update (02_creators.sql).' : error.message);
+    }
   };
 
   const toggleFollow = async () => {
@@ -361,7 +392,13 @@ export default function UserProfileScreen() {
   const isMe = session?.user?.id === id;
   const videos = posts.filter((p) => p.video_url);
   const isLocked = !!profile?.is_private && !isMe && !isFollowing;
-  const listData = isLocked ? [] : activeTab === 'posts' ? posts : activeTab === 'reposts' ? reposts : videos;
+  // The pinned post (if any) sits first in the Posts tab. All of a person's
+  // own posts are loaded here, so no extra fetch is needed.
+  const pinnedId: string | null = profile?.pinned_post_id || null;
+  const postsOrdered = pinnedId && posts.some((p) => p.id === pinnedId)
+    ? [posts.find((p) => p.id === pinnedId)!, ...posts.filter((p) => p.id !== pinnedId)]
+    : posts;
+  const listData = isLocked ? [] : activeTab === 'posts' ? postsOrdered : activeTab === 'reposts' ? reposts : videos;
 
   const openFollowing = () => {
     if (profile?.who_can_see_following === 'nobody' && !isMe) {
@@ -429,7 +466,7 @@ export default function UserProfileScreen() {
         scrollEventThrottle={16}
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
-        renderItem={({ item }: any) => <PostCard post={item} active={screenFocused && (item.feedKey || item.id) === activeVideoKey} currentUserId={session?.user?.id} onLike={toggleLike} onRepost={toggleRepost} onQuote={quoteRepost} onDelete={deletePost} />}
+        renderItem={({ item }: any) => <PostCard post={item} active={screenFocused && (item.feedKey || item.id) === activeVideoKey} currentUserId={session?.user?.id} onLike={toggleLike} onRepost={toggleRepost} onQuote={quoteRepost} onDelete={deletePost} pinned={activeTab === 'posts' && item.id === pinnedId} onPin={isMe && activeTab === 'posts' ? togglePin : undefined} />}
         ListHeaderComponent={
           <View style={[styles.header, { backgroundColor: colors.bg, borderBottomColor: colors.border }]}>
             {/* Cover photo: the profile picture sits across its bottom edge (top half on the cover). */}
@@ -440,7 +477,7 @@ export default function UserProfileScreen() {
                 <LinearGradient colors={[colors.primary + 'CC', colors.primary + '33']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
               )}
               {/* Live cover: only for blue-badge (or gold) accounts, only while this screen is in front. */}
-              {profile?.cover_video_url && (profile?.verified || profile?.is_authentic) && screenFocused ? <LiveCover url={profile.cover_video_url} paused={coverAway} /> : null}
+              {profile?.cover_video_url && (profile?.verified || profile?.is_authentic || coverEarned) && screenFocused ? <LiveCover url={profile.cover_video_url} paused={coverAway} /> : null}
               {/* The fade: the cover melts into the page colour, so the name and numbers sit on it. */}
               <LinearGradient colors={[colors.bg + '00', colors.bg + 'CC', colors.bg]} locations={[0.3, 0.72, 1]} style={StyleSheet.absoluteFill} />
             </View>
@@ -464,9 +501,17 @@ export default function UserProfileScreen() {
                   </View>
                 </View>
               </View>
-              <TouchableOpacity activeOpacity={0.9} onPress={() => (ringFor(profile?.id || id as any) ? router.push(`/moment/${profile?.id || id}`) : profile?.avatar_url && setViewAvatar(true))} style={[styles.avatarBig, { borderColor: colors.bg }]}>
-                <RingAvatar userId={profile?.id || (id as any)} uri={profile?.avatar_url} size={AVATAR_BIG} noTap />
-              </TouchableOpacity>
+              <View style={{ alignItems: 'center' }}>
+                <TouchableOpacity activeOpacity={0.9} onPress={() => (ringFor(profile?.id || id as any) ? router.push(`/moment/${profile?.id || id}`) : profile?.avatar_url && setViewAvatar(true))} style={[styles.avatarBig, { borderColor: colors.bg }]}>
+                  <RingAvatar userId={profile?.id || (id as any)} uri={profile?.avatar_url} size={AVATAR_BIG} noTap />
+                </TouchableOpacity>
+                {isMe && profile?.is_professional ? (
+                  <TouchableOpacity activeOpacity={0.8} onPress={() => router.push('/creator')} style={[styles.dashBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '1A' }]}>
+                    <Ionicons name="stats-chart" size={13} color={colors.primary} />
+                    <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '700' }}>Dashboard</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             </View>
             {!isMe && (
               <View style={styles.buttonRow}>
@@ -617,6 +662,7 @@ const styles = StyleSheet.create({
   statsRow: { flexDirection: 'row', gap: 16 },
   statNum: { fontSize: 21, fontWeight: '800' },
   statLabel: { fontSize: 13, marginTop: 1 },
+  dashBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8, marginLeft: 8, borderWidth: 1, borderRadius: 14, paddingVertical: 5, paddingHorizontal: 12 },
   avatarBig: { borderWidth: 3, borderRadius: 60, marginLeft: 8 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, marginTop: 14 },
   name: { fontSize: 18, fontWeight: '800', flexShrink: 1 },

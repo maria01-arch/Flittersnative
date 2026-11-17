@@ -5,7 +5,7 @@ import { supabase } from './supabase';
 const sent = new Set<string>(); // ads already counted as seen in this app session
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
-export function trackAd(adId: string | null | undefined, event: 'impression' | 'click') {
+export function trackAd(adId: string | null | undefined, event: 'impression' | 'click' | 'share') {
   if (!adId) return;
   const id = String(adId);
   try {

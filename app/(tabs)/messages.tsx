@@ -6,6 +6,8 @@ import Text from '@/components/AppText';
 import { Swipeable } from 'react-native-gesture-handler';
 import { isAfterCleared } from '@/lib/clearHistory';
 import { router, useFocusEffect } from 'expo-router';
+import { fetchStreaks } from '@/lib/streaks';
+import StreakFlame from '@/components/StreakFlame';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/AuthContext';
@@ -371,6 +373,18 @@ export default function ChatsScreen() {
       .catch(() => {});
   }, [session?.user?.id]);
 
+  // Streak flames next to chats (refreshed each time this tab comes into view).
+  const [streaks, setStreaks] = useState<Record<string, { streak: number; at_risk: boolean }>>({});
+  useFocusEffect(
+    useCallback(() => {
+      fetchStreaks().then((rows) => {
+        const m: Record<string, { streak: number; at_risk: boolean }> = {};
+        rows.forEach((r) => { if (r.streak >= 2) m[r.conversation_id] = { streak: r.streak, at_risk: r.at_risk && !r.me_today }; });
+        setStreaks(m);
+      });
+    }, [])
+  );
+
   // Coming back from reading a chat: recount, so the dot clears.
   useFocusEffect(
     useCallback(() => {
@@ -604,6 +618,7 @@ export default function ChatsScreen() {
               item={item}
               online={item.kind === 'dm' && onlineIds.has(item.otherId)}
               typing={typingText[key] || ''}
+              streak={item.kind === 'dm' ? streaks[item.id] : undefined}
               colors={colors}
               onOpen={openChatRef}
               onMenu={openMenuRef}
@@ -754,7 +769,7 @@ const styles = StyleSheet.create({
 // One chat row. Memoised so a message arriving, someone typing or a presence
 // change redraws only the rows that changed — not the whole list while you
 // are dragging one to the side.
-const ChatRow = memo(function ChatRow({ item, online, typing, colors, onOpen, onMenu, setSwipeRef }: any) {
+const ChatRow = memo(function ChatRow({ item, online, typing, streak, colors, onOpen, onMenu, setSwipeRef }: any) {
   const key = `${item.kind}_${item.id}`;
   return (
     <Swipeable
@@ -784,6 +799,7 @@ const ChatRow = memo(function ChatRow({ item, online, typing, colors, onOpen, on
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Text style={[styles.chatTitle, { color: colors.text }, item.unread > 0 && { fontWeight: '900' }]}>{item.title}</Text>
             {item.kind === 'group' && <Ionicons name="people" size={13} color={colors.faint} />}
+            {streak ? <StreakFlame days={streak.streak} atRisk={streak.at_risk} /> : null}
           </View>
           {typing ? (
             <Text style={[styles.lastMessage, { color: colors.primary, fontWeight: '700' }]} numberOfLines={1}>{typing}</Text>

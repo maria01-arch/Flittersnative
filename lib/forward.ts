@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { sendInbox } from './inboxPing';
 
 export type ForwardTarget = { kind: 'dm' | 'group'; id: string; otherId?: string };
 export type ForwardPayload = {
@@ -67,7 +68,7 @@ export async function forwardTo(targets: ForwardTarget[], me: string, payload: F
     } else {
       sent++;
       // Same nudge the chat screen sends so their chat list updates at once.
-      if (t.kind === 'dm' && t.otherId) supabase.channel(`inbox_${t.otherId}`).send({ type: 'broadcast', event: 'ping', payload: {} });
+      if (t.kind === 'dm' && t.otherId) sendInbox(t.otherId, { type: 'broadcast', event: 'ping', payload: {} });
     }
   }
   return { sent, failed };

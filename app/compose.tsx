@@ -21,6 +21,8 @@ import { emitPostBus, getMyProfileCache, setMyProfileCache, setFailedDraft, take
 import LinkPreviewCard from '@/components/LinkPreviewCard';
 import { getFirstUrl } from '@/lib/linkPreview';
 import { useTheme } from '@/lib/ThemeContext';
+import SchedulePicker from '@/components/SchedulePicker';
+import { schedulePost, whenText } from '@/lib/scheduled';
 
 const MAX_LENGTH = 300;
 
@@ -65,6 +67,15 @@ export default function ComposeScreen() {
   const replyCommentId = rp.replyCommentId ? String(rp.replyCommentId) : '';
   const [segments, setSegments] = useState<Segment[]>([emptySegment()]);
   const [posting, setPosting] = useState(false);
+  // Scheduling is a Professional-mode tool.
+  const [isPro, setIsPro] = useState(false);
+  const [scheduleAt, setScheduleAt] = useState<Date | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  useEffect(() => {
+    const me = session?.user?.id;
+    if (!me) return;
+    supabase.from('profiles').select('is_professional').eq('id', me).maybeSingle().then(({ data }) => setIsPro(!!(data as any)?.is_professional));
+  }, [session?.user?.id]);
 
   // A post that failed to upload in the background comes back here, so
   // nothing typed is lost. Also keeps my profile handy for the instant preview.
@@ -176,8 +187,58 @@ export default function ComposeScreen() {
 
   const hasAnyContent = segments.some((s) => s.text.trim() || s.linkUrl || s.imageUri || s.videoUri);
 
+  // Upload the pictures/videos now, then hand the whole post to the server to
+  // publish at the chosen time. The composer stays open until it is saved.
+  const submitScheduled = async () => {
+    if (!scheduleAt || !session?.user?.id) return;
+    if (scheduleAt.getTime() < Date.now() + 2.5 * 60 * 1000) {
+      Alert.alert('Time has passed', 'Pick a new time a few minutes from now.');
+      setPickerOpen(true);
+      return;
+    }
+    setPosting(true);
+    const items: { content: string; image_url: string | null; video_url: string | null; thumbnail_url: string | null }[] = [];
+    try {
+      for (const seg of segments) {
+        if (!seg.text.trim() && !seg.linkUrl && !seg.imageUri && !seg.videoUri) continue;
+        let imageUrl: string | null = null;
+        let videoUrl: string | null = null;
+        let thumbUrl: string | null = null;
+        if (seg.imageUri) {
+          imageUrl = await uploadImage(seg.imageUri, `posts/${session.user.id}`);
+          if (!imageUrl) throw new Error('The image failed to upload — check your connection and try again.');
+        }
+        if (seg.videoUri) {
+          setVideoProgress(0);
+          videoUrl = await uploadVideo(seg.videoUri, `posts/${session.user.id}`, setVideoProgress);
+          setVideoProgress(null);
+          if (!videoUrl) throw new Error('The video failed to upload — check your connection and try again.');
+          try {
+            const frame = await VideoThumbnails.getThumbnailAsync(seg.videoUri, { time: 1000 });
+            thumbUrl = await uploadImage(frame.uri, `posts/${session.user.id}`);
+          } catch {}
+        }
+        items.push({ content: fullText(seg), image_url: imageUrl, video_url: videoUrl, thumbnail_url: thumbUrl });
+      }
+    } catch (e: any) {
+      setVideoProgress(null);
+      setPosting(false);
+      Alert.alert("Couldn't schedule", e?.message || 'Upload failed.');
+      return;
+    }
+    const r = await schedulePost(items, coowners.map((c) => c.id), scheduleAt);
+    setPosting(false);
+    if (!r.ok) {
+      Alert.alert("Couldn't schedule", r.error);
+      return;
+    }
+    Alert.alert('Scheduled', `Your post will go live ${whenText(scheduleAt)}. You can change or cancel it in Creator dashboard → Scheduled posts.`);
+    router.back();
+  };
+
   const submit = async () => {
     if (!hasAnyContent || !session?.user?.id) return;
+    if (scheduleAt) return submitScheduled();
     if (replyCommentId && !segments.some((x) => x.videoUri)) {
       Alert.alert('Add a video', 'A reply reel needs a video. Tap the picture icon to choose one.');
       return;
@@ -352,6 +413,11 @@ export default function ComposeScreen() {
         <TouchableOpacity onPress={() => router.back()}>
           <Text style={[styles.cancel, { color: colors.subtext }]}>Cancel</Text>
         </TouchableOpacity>
+        {isPro && !replyCommentId ? (
+          <TouchableOpacity onPress={() => setPickerOpen(true)} hitSlop={10} disabled={posting} style={{ marginLeft: 'auto', marginRight: 14 }}>
+            <Ionicons name={scheduleAt ? 'time' : 'time-outline'} size={26} color={scheduleAt ? colors.primary : colors.subtext} />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity
           style={[styles.postButton, { backgroundColor: colors.primary }, !hasAnyContent && styles.postButtonDisabled]}
           onPress={submit}
@@ -359,9 +425,17 @@ export default function ComposeScreen() {
         >
           {posting ? (
             videoProgress !== null ? <Text style={styles.postButtonText}>{Math.round(videoProgress * 100)}%</Text> : <ActivityIndicator color="#fff" size="small" />
-          ) : <Text style={styles.postButtonText}>{segments.length > 1 ? 'Post thread' : 'Post'}</Text>}
+          ) : <Text style={styles.postButtonText}>{scheduleAt ? 'Schedule' : segments.length > 1 ? 'Post thread' : 'Post'}</Text>}
         </TouchableOpacity>
       </View>
+      {scheduleAt ? (
+        <TouchableOpacity onPress={() => setPickerOpen(true)} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginBottom: 6, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, backgroundColor: colors.inputBg }}>
+          <Ionicons name="time" size={16} color={colors.primary} />
+          <Text style={{ color: colors.text, fontWeight: '600', flex: 1 }}>Will post {whenText(scheduleAt)}</Text>
+          <TouchableOpacity onPress={() => setScheduleAt(null)} hitSlop={10}><Ionicons name="close" size={18} color={colors.faint} /></TouchableOpacity>
+        </TouchableOpacity>
+      ) : null}
+      <SchedulePicker visible={pickerOpen} initial={scheduleAt} onCancel={() => setPickerOpen(false)} onConfirm={(d) => { setScheduleAt(d); setPickerOpen(false); }} />
 
       <ScrollView keyboardShouldPersistTaps="handled">
         {!!replyCommentId && (

@@ -74,13 +74,17 @@ async function uploadFile(uri: string, path: string, mimeType: string): Promise<
   // Diagnostic: immediately re-fetch the headers of the file we just
   // uploaded, so any future report includes real server-side facts
   // (status/type/size) instead of guessing.
-  try {
-    const head = await fetch(json.publicUrl, { method: 'HEAD' });
-    console.error(
-      `[Upload] verify — local file was ${info.size} bytes (${mimeType}) → server reports status ${head.status}, content-type "${head.headers.get('content-type')}", content-length ${head.headers.get('content-length')} at ${json.publicUrl}`
-    );
-  } catch (err) {
-    console.error('[Upload] verify HEAD request failed for', json.publicUrl, err);
+  // Development builds only: in a release build this was an extra network
+  // round trip on every upload, logged as an error.
+  if (__DEV__) {
+    try {
+      const head = await fetch(json.publicUrl, { method: 'HEAD' });
+      console.log(
+        `[Upload] verify — local file was ${info.size} bytes (${mimeType}) → server reports status ${head.status}, content-type "${head.headers.get('content-type')}", content-length ${head.headers.get('content-length')} at ${json.publicUrl}`
+      );
+    } catch (err) {
+      console.log('[Upload] verify HEAD request failed for', json.publicUrl, err);
+    }
   }
 
   return json.publicUrl;

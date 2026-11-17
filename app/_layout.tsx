@@ -18,6 +18,7 @@ import { ShareProvider, useIncomingShare } from '@/lib/shareIntent';
 import { useBanWatch } from '@/lib/useBanWatch';
 import { hasPendingBan } from '@/lib/banInfo';
 import UpdateGate from '@/components/UpdateGate';
+import CallHost from '@/components/CallHost';
 
 function RootLayoutNav() {
   const { session, initializing } = useAuth();
@@ -89,6 +90,10 @@ function RootLayoutNav() {
         <Stack.Screen name="moment/[uid]" options={{ headerShown: false, animation: 'fade', contentStyle: { backgroundColor: '#000' } }} />
         <Stack.Screen name="moment-new" options={{ headerShown: false, animation: 'slide_from_bottom', contentStyle: { backgroundColor: '#000' } }} />
         <Stack.Screen name="saved" options={{ title: 'Saved posts' }} />
+        <Stack.Screen name="app-theme" options={{ headerShown: false }} />
+        <Stack.Screen name="streaks" options={{ headerShown: false }} />
+        <Stack.Screen name="call" options={{ headerShown: false, presentation: 'fullScreenModal', gestureEnabled: false, animation: 'slide_from_bottom' }} />
+        <Stack.Screen name="ad-comments/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="login" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         <Stack.Screen name="compose" options={{ presentation: 'modal', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
@@ -102,6 +107,14 @@ function RootLayoutNav() {
         <Stack.Screen name="groups/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="edit-profile" options={{ presentation: 'modal', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
+        <Stack.Screen name="creator/index" options={{ headerShown: false }} />
+        <Stack.Screen name="account-health/index" options={{ headerShown: false }} />
+        <Stack.Screen name="account-health/strike/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="help/index" options={{ headerShown: false }} />
+        <Stack.Screen name="help/new" options={{ headerShown: false }} />
+        <Stack.Screen name="help/ticket/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="creator/post/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="creator/scheduled" options={{ headerShown: false }} />
         <Stack.Screen name="new-message" options={{ presentation: 'modal', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
         <Stack.Screen name="flitters-ai" options={{ headerShown: false }} />
         <Stack.Screen name="signup" options={{ headerShown: false }} />
@@ -112,6 +125,7 @@ function RootLayoutNav() {
         <Stack.Screen name="scan" options={{ headerShown: false, presentation: 'modal' }} />
       </Stack>
       <UpdateGate />
+      <CallHost />
     </RNThemeProvider>
   );
 }
