@@ -100,6 +100,29 @@ async function pushToUser(userId: string, title: string, body: string, data: Rec
   await sendPush(tokens, finalTitle, body, { ...data, toUserId: userId }, categoryId);
 }
 
+// Calls: sent as-is (high priority, the "calls" channel with the ringtone, gone after 45 seconds
+// if undelivered). `data` is what the app reads when the notification is tapped or dismissed.
+async function pushCallRaw(userId: string, message: Record<string, unknown>) {
+  const tokens = await tokensFor(userId);
+  await Promise.all(
+    tokens.map(async (to) => {
+      try {
+        const res = await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify([{ to, priority: 'high', ...message, data: { ...(message.data as object), toUserId: userId } }]),
+        });
+        const text = await res.text();
+        if (!res.ok) { console.error('[send-push] call push rejected:', res.status, text); return; }
+        const ticket = JSON.parse(text)?.data?.[0];
+        if (ticket?.status === 'error' && ticket.details?.error === 'DeviceNotRegistered') await supabase.from('push_tokens').delete().eq('token', to);
+      } catch (err) {
+        console.error('[send-push] call push failed:', err);
+      }
+    })
+  );
+}
+
 // Only your own database webhooks may call this function. Each webhook sends the header
 // "x-webhook-secret" with the secret you saved as PUSH_WEBHOOK_SECRET. Without this check
 // anyone who finds the function address could send fake notifications to your users.
@@ -125,7 +148,9 @@ Deno.serve(async (req) => {
 
     console.log('[send-push] event', table, record?.id, record?.type || '');
     // A reaction row may not have its own id: one push per person per message.
-    const rowKey = record?.id
+    const rowKey = table === 'calls' && record?.id
+      ? `${table}:${record.id}:${record.status}`
+      : record?.id
       ? `${table}:${record.id}`
       : table === 'message_reactions'
         ? `${table}:${record?.message_id}:${record?.user_id}`
@@ -163,6 +188,7 @@ Deno.serve(async (req) => {
         actorId: record.actor_id,
       });
     } else if (table === 'messages') {
+      if (record.call_id) return new Response('call card');   // the call has its own push
       const { data: participants } = await supabase
         .from('conversation_participants')
         .select('*')
@@ -249,6 +275,25 @@ Deno.serve(async (req) => {
         groupId: msg.group_id,
         groupName: group?.name,
       });
+    } else if (table === 'calls') {
+      const { data: caller } = await supabase.from('profiles').select('display_name,avatar_url').eq('id', record.caller_id).maybeSingle();
+      const name = caller?.display_name || 'Someone';
+      const base = { callId: record.id, callerId: record.caller_id, callerName: name, callerAvatar: caller?.avatar_url, conversationId: record.conversation_id };
+      if (payload.type === 'INSERT' && record.status === 'ringing') {
+        await pushCallRaw(record.callee_id, {
+          title: name, body: 'Incoming voice call', channelId: 'calls', sound: 'default', ttl: 45,
+          data: { type: 'incoming_call', ...base },
+        });
+      } else if (record.status === 'missed') {
+        await pushCallRaw(record.callee_id, {
+          title: name, body: 'Missed voice call', channelId: 'default', sound: 'default', ttl: 3600,
+          data: { type: 'missed_call', ...base, otherId: record.caller_id, otherName: name, otherAvatar: caller?.avatar_url },
+        });
+        // Also take the "incoming call" alert away.
+        await pushCallRaw(record.callee_id, { data: { type: 'call_ended', callId: record.id, __flit: { dismissCallId: record.id } }, ttl: 60, _contentAvailable: true });
+      } else if (record.status === 'cancelled' || record.status === 'accepted') {
+        await pushCallRaw(record.callee_id, { data: { type: 'call_ended', callId: record.id, __flit: { dismissCallId: record.id } }, ttl: 60, _contentAvailable: true });
+      }
     } else if (table === 'posts') {
       // New post: tell everyone who turned on the bell for this author.
       // Only the first post of a thread notifies.

@@ -15,6 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchStreaks, streakHint, REWARD_DAYS, type Streak } from '@/lib/streaks';
 import StreakFlame from '@/components/StreakFlame';
 import { startOutgoing } from '@/lib/calls/callManager';
+import CallCard from '@/components/CallCard';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
@@ -1340,6 +1341,9 @@ export default function ConversationScreen() {
           const newer = messages[index - 1];
           const groupedWithAbove = !!older && older.sender_id === item.sender_id && (new Date(item.created_at).getTime() - new Date(older.created_at).getTime()) <= 120000;
           const groupedWithBelow = !!newer && newer.sender_id === item.sender_id && (new Date(newer.created_at).getTime() - new Date(item.created_at).getTime()) <= 120000;
+          if (item.call_id) {
+            return <CallCard message={item} isMine={item.sender_id === session?.user?.id} onCallBack={startVoiceCall} />;
+          }
           return (
             <MessageBubble
               message={item}

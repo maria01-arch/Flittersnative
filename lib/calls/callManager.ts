@@ -51,6 +51,12 @@ function friendly(message: string | undefined, name: string): string {
   return "Couldn't start the call. Check your connection and try again.";
 }
 
+// A Supabase call is only SENT when it is awaited (or .then() is called). This runs one in the
+// background without waiting. (Calling supabase.rpc(...) and ignoring it sends nothing.)
+function fire(q: PromiseLike<unknown>) {
+  Promise.resolve(q).then(() => {}, () => {});
+}
+
 // ---- everything below belongs to the call in progress and is thrown away when it ends ----
 let pc: any = null;
 let localStream: any = null;
@@ -181,6 +187,16 @@ function watchCall(callId: string) {
   }, 15000));
 }
 
+// Safety net next to realtime: every 3 seconds, ask what the call's state is. Catches a
+// "they hung up" or "they answered" that realtime was slow to deliver.
+function pollStatus(callId: string) {
+  timers.push(setInterval(async () => {
+    if (!state.callId || state.callId !== callId || state.phase === 'connected' || state.phase === 'ended' || state.phase === 'idle') return;
+    const { data } = await supabase.from('calls').select('status').eq('id', callId).maybeSingle();
+    if (data?.status) onRemoteStatus(data.status);
+  }, 3000));
+}
+
 function onRemoteStatus(status?: string) {
   if (!status || ending) return;
   if (status === 'declined') finish(`${state.peerName || 'They'} declined the call.`);
@@ -224,13 +240,14 @@ export async function startOutgoing(peer: { id: string; name: string; avatar: st
   try {
     if (!(await buildConnection())) return { ok: true };
     watchCall(callId);
+    pollStatus(callId);
     const offer = await pc.createOffer({ offerToReceiveAudio: true });
     await pc.setLocalDescription(offer);
     await signal('offer', { type: offer.type, sdp: offer.sdp });
     timeouts.push(setTimeout(() => { if (state.phase === 'calling') hangup('timeout'); }, RING_SECONDS * 1000));
   } catch (err: any) {
     console.warn('[call] could not start:', err);
-    supabase.rpc('end_call', { p_id: callId, p_reason: 'failed' });
+    fire(supabase.rpc('end_call', { p_id: callId, p_reason: 'failed' }));
     finish("Couldn't start the call.");
   }
   return { ok: true };
@@ -247,6 +264,7 @@ export function receiveIncoming(c: { callId: string; callerId: string; name: str
   timeouts.push(setTimeout(() => { if (state.phase === 'ringing_in') finish('Missed call.'); }, (RING_SECONDS + 10) * 1000));
   // Watch for the caller giving up while it rings.
   const id = c.callId;
+  pollStatus(id);
   channels.push(supabase.channel(`call-ring-${id}`).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'calls', filter: `id=eq.${id}` }, (p: any) => { if (state.phase === 'ringing_in') onRemoteStatus(p.new?.status); }).subscribe());
 }
 
@@ -255,7 +273,7 @@ export async function acceptIncoming() {
   const callId = state.callId;
   stopRing();
   if (!(await ensureMic())) {
-    supabase.rpc('decline_call', { p_id: callId });
+    fire(supabase.rpc('decline_call', { p_id: callId }));
     finish('Microphone access is needed for calls. Allow it in your phone settings.');
     return;
   }
@@ -266,19 +284,19 @@ export async function acceptIncoming() {
   try {
     channels.forEach((c) => { try { supabase.removeChannel(c); } catch {} }); channels = [];
     timeouts.forEach(clearTimeout); timeouts = [];
-    if (!(await buildConnection())) { supabase.rpc('end_call', { p_id: callId, p_reason: 'failed' }); return; }
+    if (!(await buildConnection())) { fire(supabase.rpc('end_call', { p_id: callId, p_reason: 'failed' })); return; }
     watchCall(callId);
     await pullSignals();   // the caller's offer is already waiting
   } catch (err) {
     console.warn('[call] could not answer:', err);
-    supabase.rpc('end_call', { p_id: callId, p_reason: 'failed' });
+    fire(supabase.rpc('end_call', { p_id: callId, p_reason: 'failed' }));
     finish("Couldn't connect the call.");
   }
 }
 
 export async function declineIncoming() {
   if (state.phase !== 'ringing_in' || !state.callId) return;
-  supabase.rpc('decline_call', { p_id: state.callId });
+  fire(supabase.rpc('decline_call', { p_id: state.callId }));
   finish(null);
 }
 
@@ -287,7 +305,7 @@ export async function hangup(reason: 'hangup' | 'timeout' | 'failed' = 'hangup')
   const id = state.callId;
   const wasCaller = state.role === 'caller';
   const wasRinging = state.phase === 'calling';
-  supabase.rpc('end_call', { p_id: id, p_reason: reason });
+  fire(supabase.rpc('end_call', { p_id: id, p_reason: reason }));
   finish(reason === 'failed' ? 'The connection was lost.' : reason === 'timeout' ? 'No answer.' : wasCaller && wasRinging ? null : 'Call ended.');
 }
 
