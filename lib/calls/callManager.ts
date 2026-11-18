@@ -32,6 +32,10 @@ const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 const set = (patch: Partial<CallState>) => { state = { ...state, ...patch }; emit(); };
 export const getCallState = () => state;
+// Fired once whenever a call finishes, so an open chat can pull the new call card at once.
+const endListeners = new Set<() => void>();
+export function onCallFinished(fn: () => void) { endListeners.add(fn); return () => { endListeners.delete(fn); }; }
+
 export function subscribeCall(fn: () => void) { listeners.add(fn); return () => { listeners.delete(fn); }; }
 
 const RING_SECONDS = 45;
@@ -217,6 +221,7 @@ async function finish(message: string | null, silent = false) {
   pc = null; localStream = null; pendingIce = []; remoteSet = false; gotOffer = false; lastSignalId = 0; seenSignals.clear();
   callAudioStop();
   set({ phase: 'ended', message: silent ? message : message });
+  endListeners.forEach((l) => { try { l(); } catch {} });
   setTimeout(() => { state = { ...IDLE }; emit(); ending = false; }, 1800);
 }
 

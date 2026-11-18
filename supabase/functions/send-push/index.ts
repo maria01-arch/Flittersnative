@@ -206,6 +206,7 @@ Deno.serve(async (req) => {
         otherAvatar: sender?.avatar_url,
       }, 'chat_reply');
     } else if (table === 'group_messages') {
+      if (record.system_event) return new Response('system message');   // "X added Y" etc: no push
       const [{ data: members }, { data: group }, { data: sender }] = await Promise.all([
         supabase.from('group_members').select('*').eq('group_id', record.group_id).neq('user_id', record.sender_id),
         supabase.from('groups').select('name').eq('id', record.group_id).single(),

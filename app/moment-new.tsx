@@ -11,6 +11,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/ThemeContext';
 import { uploadImage, uploadVideo } from '@/lib/upload';
 import VideoTrimmer from '@/components/VideoTrimmer';
+import KeyboardWrap from '@/components/KeyboardWrap';
 import { momentsChanged } from '@/lib/momentRings';
 
 const MAX_VIDEO_SECONDS = 15;
@@ -61,7 +62,7 @@ export default function NewMoment() {
   };
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: '#000' }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardWrap style={{ flex: 1, backgroundColor: '#000' }} bottomInset={0}>
       <View style={StyleSheet.absoluteFill}>
         {media ? media.type === 'video' ? <Preview uri={media.uri} /> : <Image source={{ uri: media.uri }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
       </View>
@@ -86,7 +87,7 @@ export default function NewMoment() {
           </TouchableOpacity>
         </View>
       ) : (
-        <View style={[styles.bottom, { paddingBottom: insets.bottom + 12 }]}>
+        <View style={[styles.bottom, { paddingBottom: insets.bottom + 12 }]} pointerEvents="box-none">
           <TextInput
             style={styles.input}
             placeholder="Add a caption…"
@@ -117,7 +118,7 @@ export default function NewMoment() {
           setMedia({ uri: u, type: 'video' });
         }}
       />
-    </KeyboardAvoidingView>
+    </KeyboardWrap>
   );
 }
 
@@ -129,7 +130,7 @@ const styles = StyleSheet.create({
   hint: { color: 'rgba(255,255,255,0.75)', marginBottom: 6 },
   big: { flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center', borderRadius: 16, paddingVertical: 15, paddingHorizontal: 22, alignSelf: 'stretch' },
   bigTxt: { color: '#fff', fontWeight: '800', fontSize: 15 },
-  bottom: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 14, gap: 12 },
+  bottom: { flex: 1, justifyContent: 'flex-end', paddingHorizontal: 14, gap: 12 },
   input: { backgroundColor: 'rgba(0,0,0,0.55)', color: '#fff', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 11, fontSize: 15 },
   smallBtn: { borderRadius: 14, paddingVertical: 14, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center' },
 });

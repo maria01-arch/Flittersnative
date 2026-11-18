@@ -324,7 +324,7 @@ export default function GroupChatScreen() {
   const attachExtras = async (msgs: any[]) => {
     if (!msgs.length) return msgs;
     const ids = msgs.map((m) => m.id);
-    const senderIds = [...new Set(msgs.map((m) => m.sender_id))];
+    const senderIds = [...new Set(msgs.map((m) => m.sender_id).filter(Boolean))];
     const [{ data: reactions }, { data: authors }, hiddenRes] = await Promise.all([
       supabase.from('group_message_reactions').select('group_message_id,user_id,emoji').in('group_message_id', ids),
       supabase.from('profiles').select('id,display_name,avatar_url').in('id', senderIds),
@@ -443,7 +443,7 @@ export default function GroupChatScreen() {
   };
 
   const addIncomingMessage = (msg: any, author?: any) => {
-    if (msg.sender_id !== session?.user?.id) playSound('incoming');
+    if (msg.sender_id !== session?.user?.id && !msg.system_event) playSound('incoming');
     if (msg.sender_id !== session?.user?.id) pushEvent({ kind: 'group', id: String(id), msg: { __read: true } });
     setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [{ ...msg, reactions: msg.reactions || [], author: author || msg.author }, ...prev]));
   };
@@ -473,7 +473,7 @@ export default function GroupChatScreen() {
         channel = supabase
           .channel(`gc:${id}`)
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'group_messages', filter: `group_id=eq.${id}` }, async (payload) => {
-          const { data: author } = await supabase.from('profiles').select('display_name,avatar_url').eq('id', payload.new.sender_id).single();
+          const { data: author } = payload.new.system_event || !payload.new.sender_id ? { data: null } : await supabase.from('profiles').select('display_name,avatar_url').eq('id', payload.new.sender_id).single();
           addIncomingMessage(payload.new, author);
         })
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'group_messages', filter: `group_id=eq.${id}` }, (payload) => {
@@ -1330,6 +1330,13 @@ export default function GroupChatScreen() {
         ListFooterComponent={loadingMore ? <ActivityIndicator style={{ marginVertical: 10 }} color={colors.primary} /> : null}
         contentContainerStyle={{ paddingVertical: 8 }}
         renderItem={({ item, index }) => {
+          if (item.system_event) {
+            return (
+              <View style={{ alignItems: 'center', paddingVertical: 6, paddingHorizontal: 24 }}>
+                <Text style={{ fontSize: 12, color: colors.subtext, textAlign: 'center' }}>{item.content}</Text>
+              </View>
+            );
+          }
           const older = messages[index + 1];
           const newer = messages[index - 1];
           const groupedWithAbove = !!older && older.sender_id === item.sender_id && (new Date(item.created_at).getTime() - new Date(older.created_at).getTime()) <= 120000;

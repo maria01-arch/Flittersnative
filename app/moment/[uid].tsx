@@ -146,11 +146,13 @@ export default function MomentViewer() {
     }
     if (me && !seen.current.has(cur.id)) {
       seen.current.add(cur.id);
+      // the last moment is now on screen: calm the ring at once, don't wait for the network
+      if (items && idx >= items.length - 1) markSeenLocal(String(uid), true);
       // plain insert: a "already watched" duplicate error (23505) is fine
       supabase.from('moment_views').insert({ moment_id: cur.id, viewer_id: me }).then(({ error }) => {
         if (error && error.code !== '23505') console.warn('[moment view]', error.message);
         // calm the ring on this phone right away once every moment of theirs was shown
-        if (items && items.every((m) => seen.current.has(m.id))) markSeenLocal(String(uid), true);
+        if (items && (idx >= items.length - 1 || items.every((m) => seen.current.has(m.id)))) markSeenLocal(String(uid), true);
       });
     }
     if (me && !isMine) {

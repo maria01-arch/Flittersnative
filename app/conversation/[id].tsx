@@ -14,7 +14,7 @@ import { useLocalSearchParams, router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchStreaks, streakHint, REWARD_DAYS, type Streak } from '@/lib/streaks';
 import StreakFlame from '@/components/StreakFlame';
-import { startOutgoing } from '@/lib/calls/callManager';
+import { startOutgoing, onCallFinished } from '@/lib/calls/callManager';
 import CallCard from '@/components/CallCard';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
@@ -524,6 +524,25 @@ export default function ConversationScreen() {
       supabase.from('messages').update({ read_at: readAt }).eq('id', msg.id).then(() => {});
     }
   };
+
+  // After a call the card is written by the server a moment later; pull it in
+  // right away (a few quick tries) instead of waiting for the next refresh.
+  useEffect(() => {
+    if (!id) return;
+    const timers: any[] = [];
+    const pull = () => {
+      supabase.from('messages').select('*').eq('conversation_id', id).not('call_id', 'is', null).order('created_at', { ascending: false }).limit(5).then(({ data }) => {
+        if (!data?.length) return;
+        setMessages((prev) => {
+          const have = new Set(prev.map((m: any) => m.id));
+          const add = data.filter((m: any) => !have.has(m.id)).map((m: any) => ({ ...m, reactions: [] }));
+          return add.length ? [...add, ...prev].sort((a: any, b: any) => +new Date(b.created_at) - +new Date(a.created_at)) : prev;
+        });
+      });
+    };
+    const off = onCallFinished(() => { [200, 900, 2200].forEach((ms) => timers.push(setTimeout(pull, ms))); });
+    return () => { off(); timers.forEach(clearTimeout); };
+  }, [id]);
 
   const markAllRead = async () => {
     if (!session?.user?.id) return;
@@ -1244,14 +1263,14 @@ export default function ConversationScreen() {
         <TouchableOpacity onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.topBarCenter} onPress={() => otherId && router.push(`/user/${otherId}`)}>
+        <TouchableOpacity style={[styles.topBarCenter, { flex: 1, minWidth: 0 }]} onPress={() => otherId && router.push(`/user/${otherId}`)}>
           <View>
             <RingAvatar userId={otherId as string} uri={otherProfile?.avatar_url || (otherAvatar as string)} size={34} noTap />
             {isOtherOnline && <View style={[styles.onlineDot, { borderColor: colors.card }]} />}
           </View>
-          <View>
+          <View style={{ flexShrink: 1, minWidth: 0 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-              <Text style={[styles.topBarTitle, { color: colors.text }]}>{otherProfile?.display_name || name || 'Chat'}</Text>
+              <Text style={[styles.topBarTitle, { color: colors.text, flexShrink: 1 }]} numberOfLines={1} ellipsizeMode="tail">{otherProfile?.display_name || name || 'Chat'}</Text>
               <VerifiedBadge verified={otherProfile?.verified} isAuthentic={otherProfile?.is_authentic} plan={otherProfile?.verified_plan} size={12} />
               {streak ? <StreakFlame days={streak.streak} atRisk={streak.at_risk && !streak.me_today} /> : null}
             </View>
@@ -1260,7 +1279,7 @@ export default function ConversationScreen() {
             </Text>
           </View>
         </TouchableOpacity>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18, flexShrink: 0 }}>
           {otherId ? (
             <TouchableOpacity onPress={startVoiceCall} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Ionicons name="call-outline" size={22} color={colors.text} />
