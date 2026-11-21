@@ -66,7 +66,7 @@ export default function CommentCard({
   };
 
   return (
-    <TouchableOpacity activeOpacity={navigable ? 0.7 : 1} onPress={open} style={[styles.row, { borderBottomColor: colors.border, backgroundColor: colors.bg }]}>
+    <TouchableOpacity activeOpacity={navigable ? 0.7 : 1} onPress={open} style={[styles.row, { borderBottomColor: colors.border, backgroundColor: comment.gift_sent_id ? 'rgba(245,179,1,0.12)' : colors.bg }]}>
       <TouchableOpacity style={{ marginRight: 10 }} onPress={() => comment.author?.id && router.push(`/user/${comment.author.id}`)}>
         <Avatar uri={comment.author?.avatar_url} size={38} />
       </TouchableOpacity>

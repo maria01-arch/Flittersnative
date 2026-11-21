@@ -41,7 +41,7 @@ export default function CallScreen() {
 
   const status =
     call.phase === 'ringing_in' ? 'Incoming voice call'
-    : call.phase === 'calling' ? 'Calling…'
+    : call.phase === 'calling' ? (call.ringing ? 'Ringing…' : 'Calling…')
     : call.phase === 'connecting' ? 'Connecting…'
     : call.phase === 'connected' ? (call.reconnecting ? 'Reconnecting…' : timer(call.startedAt))
     : call.message || 'Call ended';

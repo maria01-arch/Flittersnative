@@ -370,6 +370,7 @@ export default function SettingsScreen() {
           <SettingsRow colors={colors} icon="link-outline" label="Links and Preview" onPress={() => setLinksOpen(true)} />
           <SettingsRow colors={colors} icon="language-outline" label="Languages" onPress={() => comingSoon('Languages')} />
           <SettingsRow colors={colors} icon="flask-outline" label="Beta features" onPress={() => comingSoon('Beta features')} />
+          <SettingsRow colors={colors} icon="wallet-outline" label="Flit coins" onPress={() => router.push('/wallet' as any)} />
           <SettingsRow colors={colors} icon="flame-outline" label="Chat streaks" onPress={() => router.push('/streaks' as any)} />
           <SettingsRow colors={colors} icon="help-circle-outline" label="Help center" onPress={() => router.push('/help')} />
           <SettingsRow colors={colors} icon="information-circle-outline" label="About" onPress={() => setAboutOpen(true)} />

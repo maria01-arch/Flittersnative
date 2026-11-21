@@ -7,7 +7,9 @@
 //                                 TURN_SECRET="<static-auth-secret from turnserver.conf, with use-auth-secret on>"
 //   B) Metered (hosted, free tier):  METERED_DOMAIN="yourapp.metered.live"   METERED_SECRET_KEY="<secret key>"
 //      (older Metered accounts that show an API key instead can use METERED_API_KEY="<api key>")
-// With neither, only free Google STUN is returned: calls work on most Wi-Fi and some mobile networks, not all.
+//   C) Cloudflare Realtime TURN (first 1,000 GB a month free):  CF_TURN_KEY_ID="<TURN key id>"   CF_TURN_API_TOKEN="<TURN key API token>"
+//      (Cloudflare dashboard > Realtime > TURN > create a TURN key)
+// With none of these, only free Google STUN is returned: calls work on most Wi-Fi and some mobile networks, not all.
 
 const STUN = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
@@ -68,6 +70,23 @@ async function meteredFromSecret(domain: string, secret: string): Promise<unknow
   return servers;
 }
 
+let cfCached: { made: number; servers: unknown[] } | null = null;
+async function cloudflareTurn(keyId: string, token: string): Promise<unknown[]> {
+  const now = Date.now();
+  if (cfCached && now - cfCached.made < 11 * 3600 * 1000) return cfCached.servers;
+  const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(keyId)}/credentials/generate-ice-servers`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ttl: 86400 }),
+  });
+  if (!r.ok) { console.error('[call-ice] cloudflare returned', r.status, await r.text()); return cfCached?.servers || []; }
+  const j = await r.json();
+  const list = Array.isArray(j?.iceServers) ? j.iceServers : j?.iceServers ? [j.iceServers] : [];
+  const servers = list.filter((x: any) => x && x.urls);
+  if (servers.length) cfCached = { made: now, servers };
+  return servers;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   const servers: unknown[] = [...STUN];
@@ -77,7 +96,11 @@ Deno.serve(async (req) => {
     const metered = Deno.env.get('METERED_DOMAIN');
     const meteredKey = Deno.env.get('METERED_API_KEY');
     const meteredSecret = Deno.env.get('METERED_SECRET_KEY');
-    if (urls.length && secret) {
+    const cfKey = Deno.env.get('CF_TURN_KEY_ID');
+    const cfToken = Deno.env.get('CF_TURN_API_TOKEN');
+    if (cfKey && cfToken) {
+      servers.push(...(await cloudflareTurn(cfKey, cfToken)));
+    } else if (urls.length && secret) {
       // coturn "REST API" credentials: a name that expires in 1 hour and its signature.
       const username = `${Math.floor(Date.now() / 1000) + 3600}:${userIdFromJwt(req)}`;
       servers.push({ urls, username, credential: await hmacBase64(secret, username) });

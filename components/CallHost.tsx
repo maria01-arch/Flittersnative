@@ -49,7 +49,7 @@ export default function CallHost() {
     <TouchableOpacity activeOpacity={0.9} onPress={() => router.push('/call' as any)} style={styles.bar}>
       <Ionicons name="call" size={16} color="#fff" />
       <Text style={styles.text} numberOfLines={1}>
-        {call.phase === 'connected' ? 'Return to call' : 'Calling'} · {call.peerName}
+        {call.phase === 'connected' ? 'Return to call' : call.phase === 'calling' && call.ringing ? 'Ringing' : 'Calling'} · {call.peerName}
       </Text>
     </TouchableOpacity>
   );

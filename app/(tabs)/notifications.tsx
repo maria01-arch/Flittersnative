@@ -18,6 +18,7 @@ const iconFor = (type: string, colors: any) => {
   if (type === 'follow') return { name: 'person-add', color: '#F59E0B' };
   if (type === 'mention') return { name: 'at', color: colors.primary };
   if (type === 'coown') return { name: 'people', color: colors.primary };
+  if (type === 'gift') return { name: 'gift', color: '#F5B301' };
   if (type === 'login_alert') return { name: 'shield-checkmark', color: colors.primary };
   return { name: 'notifications', color: colors.faint };
 };
@@ -32,6 +33,7 @@ const labelFor = (n: any) => {
   if (n.type === 'follow') return `${name} followed you`;
   if (n.type === 'mention') return `${name} mentioned you in a post`;
   if (n.type === 'coown') return `${name} added you as a co-owner of a post`;
+  if (n.type === 'gift') return n.message || `${name} sent you a gift`;
   if (n.type === 'login_alert') return `New sign-in on ${platformLabel(n.meta_platform)}${n.meta_location ? ' near ' + n.meta_location : ''}`;
   return `${name} interacted with your content`;
 };

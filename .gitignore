@@ -43,3 +43,9 @@ app-example
 /android
 *.apk
 google-services.json
+
+# AI assistant files & local notes 
+CLAUDE.MD
+.claude/
+*claude*
+

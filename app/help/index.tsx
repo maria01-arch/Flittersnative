@@ -1,10 +1,11 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import Text from '@/components/AppText';
 import { router, useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/lib/ThemeContext';
 import { spacing } from '@/lib/theme';
+import { fetchCoinConfig, canShowWebLink, type CoinConfig } from '@/lib/coins';
 import { CATEGORY_LABELS, STATUS_LABELS, TicketRow, fetchTickets, when } from '@/lib/health';
 
 const FAQ: { q: string; a: string }[] = [
@@ -17,8 +18,27 @@ const FAQ: { q: string; a: string }[] = [
   { q: 'How do I delete a post?', a: 'Open your profile, then tap the bin icon on the post.' },
 ];
 
+// The coin answers depend on how buying is set up (admin Coins page), so they are built from the live settings.
+function coinFaq(cfg: CoinConfig | null): { q: string; a: string }[] {
+  const share = cfg?.receiver_share_pct ?? 70;
+  const per = cfg?.coins_per_usd ?? 10;
+  const opens = cfg ? new Date(cfg.withdraw_opens_at).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+  let buy: string;
+  if (cfg?.play_purchase_enabled) buy = 'Open Settings → Flit coins, choose a pack and pay with Google Play. Your coins appear in your wallet straight away.';
+  else if (canShowWebLink(cfg)) buy = `Buying coins in the app may be unavailable at times. You can always get them on our website: ${cfg!.web_buy_url.replace(/^https?:\/\//, '')}. Sign in with the same account, pick a pack and pay with Paystack. Your coins show up in Settings → Flit coins. In Settings → Flit coins you can also copy the link.`;
+  else buy = 'Buying coins isn’t available in the app right now. Please check back soon.';
+  return [
+    { q: 'How can I buy Flit coins?', a: buy },
+    { q: 'How do I gift someone?', a: 'In a chat: tap the + next to the message box, then Gift. On a post: tap the + next to the comment box, then Gift. The gift goes to the creator and shows to everyone as a comment. On a profile: tap the gift icon next to Message. Pick a gift and send it.' },
+    { q: 'What happens to gifts I receive?', a: `You receive ${share}% of a gift’s value as Flit coins. You can spend them on gifts, or withdraw them once withdrawals open${opens ? ' on ' + opens : ''}. Only coins you earn can be withdrawn, not coins you bought. ${per} coins = $1, shown in your own currency in Settings → Flit coins.` },
+  ];
+}
+
 export default function HelpCenter() {
   const { colors } = useTheme();
+  const [coinCfg, setCoinCfg] = useState<CoinConfig | null>(null);
+  useEffect(() => { fetchCoinConfig().then(setCoinCfg).catch(() => {}); }, []);
+  const faqs = useMemo(() => [...FAQ, ...coinFaq(coinCfg)], [coinCfg]);
   const [tickets, setTickets] = useState<TicketRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState<number | null>(null);
@@ -77,7 +97,7 @@ export default function HelpCenter() {
         ))}
 
         <Text style={[styles.section, { color: colors.text }]}>Common questions</Text>
-        {FAQ.map((f, i) => (
+        {faqs.map((f, i) => (
           <TouchableOpacity key={f.q} activeOpacity={0.7} onPress={() => setOpen(open === i ? null : i)} style={[styles.faq, { borderColor: colors.border }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               <Text style={{ color: colors.text, fontWeight: '600', flex: 1 }}>{f.q}</Text>

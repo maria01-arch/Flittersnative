@@ -22,10 +22,11 @@ export type CallState = {
   speaker: boolean;
   startedAt: number | null;   // when the audio connected (for the timer)
   reconnecting: boolean;
+  ringing: boolean;           // caller side: the other phone is really ringing
   message: string | null;     // why it ended, in plain words
 };
 
-const IDLE: CallState = { phase: 'idle', callId: null, role: null, peerId: null, peerName: '', peerAvatar: null, conversationId: null, muted: false, speaker: false, startedAt: null, reconnecting: false, message: null };
+const IDLE: CallState = { phase: 'idle', callId: null, role: null, peerId: null, peerName: '', peerAvatar: null, conversationId: null, muted: false, speaker: false, startedAt: null, reconnecting: false, ringing: false, message: null };
 
 let state: CallState = IDLE;
 const listeners = new Set<() => void>();
@@ -177,7 +178,7 @@ function watchCall(callId: string) {
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'call_signals', filter: `to_id=eq.${me}` }, (p: any) => { if (p.new?.call_id === callId) handleSignal(p.new); })
     .subscribe();
   const upd = supabase.channel(`call-state-${callId}`)
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'calls', filter: `id=eq.${callId}` }, (p: any) => onRemoteStatus(p.new?.status))
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'calls', filter: `id=eq.${callId}` }, (p: any) => { if (p.new?.ringing_at) markRinging(); onRemoteStatus(p.new?.status); })
     .subscribe();
   channels.push(sig, upd);
   // Safety net: if realtime is slow, ask every 1.5 s while connecting and every 5 s afterwards.
@@ -196,9 +197,15 @@ function watchCall(callId: string) {
 function pollStatus(callId: string) {
   timers.push(setInterval(async () => {
     if (!state.callId || state.callId !== callId || state.phase === 'connected' || state.phase === 'ended' || state.phase === 'idle') return;
-    const { data } = await supabase.from('calls').select('status').eq('id', callId).maybeSingle();
+    const { data } = await supabase.from('calls').select('status,ringing_at').eq('id', callId).maybeSingle();
+    if ((data as any)?.ringing_at) markRinging();
     if (data?.status) onRemoteStatus(data.status);
   }, 3000));
+}
+
+// Caller side: the other phone told us it is ringing.
+function markRinging() {
+  if (state.role === 'caller' && state.phase === 'calling' && !state.ringing) set({ ringing: true });
 }
 
 function onRemoteStatus(status?: string) {
@@ -266,6 +273,7 @@ export function receiveIncoming(c: { callId: string; callerId: string; name: str
   state = { ...IDLE, phase: 'ringing_in', callId: c.callId, role: 'callee', peerId: c.callerId, peerName: c.name, peerAvatar: c.avatar, conversationId: c.conversationId ?? null };
   emit();
   playRing('ringtone');
+  fire(supabase.rpc('call_ringing', { p_id: c.callId }));   // tells the caller's screen "Ringing…"
   timeouts.push(setTimeout(() => { if (state.phase === 'ringing_in') finish('Missed call.'); }, (RING_SECONDS + 10) * 1000));
   // Watch for the caller giving up while it rings.
   const id = c.callId;

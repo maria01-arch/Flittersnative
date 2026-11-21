@@ -27,6 +27,8 @@ import { ringFor } from '@/lib/momentRings';
 import { fmtCount } from '@/lib/formatCount';
 import ProfileQRModal from '@/components/ProfileQRModal';
 import NameInfoModal from '@/components/NameInfoModal';
+import GiftSheet from '@/components/GiftSheet';
+import { giftTotals } from '@/lib/coins';
 import ShareLinkSheet from '@/components/ShareLinkSheet';
 import { profileLink } from '@/lib/flittersLinks';
 import { sendFollowRequest, cancelFollowRequest, hasPendingRequest } from '@/lib/followRequests';
@@ -70,6 +72,9 @@ export default function UserProfileScreen() {
   }, []);
   const [qrOpen, setQrOpen] = useState(false);
   const [nameInfoOpen, setNameInfoOpen] = useState(false);
+  const [giftOpen, setGiftOpen] = useState(false);
+  const [gifts, setGifts] = useState<{ count: number; top: { emoji: string; n: number }[] }>({ count: 0, top: [] });
+  useEffect(() => { if (id) giftTotals(String(id)).then(setGifts).catch(() => {}); }, [id, giftOpen]);
   // Bell: get a notification whenever this person posts.
   const [bellOn, setBellOn] = useState(false);
   const [bellBusy, setBellBusy] = useState(false);
@@ -526,6 +531,9 @@ export default function UserProfileScreen() {
                 <TouchableOpacity style={[styles.messageButton, { borderColor: colors.primary }]} onPress={startConversation}>
                   <Text style={[styles.messageText, { color: colors.primary }]}>Message</Text>
                 </TouchableOpacity>
+                <TouchableOpacity style={[styles.bellButton, { borderColor: colors.border }]} onPress={() => setGiftOpen(true)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                  <Ionicons name="gift-outline" size={20} color={colors.text} />
+                </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.bellButton, { borderColor: bellOn ? colors.primary : colors.border }, bellOn && { backgroundColor: colors.primary + '22' }]}
                   onPress={toggleBell}
@@ -539,6 +547,12 @@ export default function UserProfileScreen() {
               <Text style={[styles.name, { color: colors.text }]} numberOfLines={1}>{profile?.display_name || 'No name set'}</Text>
               <VerifiedBadge verified={profile?.verified} isAuthentic={profile?.is_authentic} plan={profile?.verified_plan} size={16} />
             </TouchableOpacity>
+            {gifts.count > 0 && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                <Text style={{ fontSize: 15 }}>{gifts.top.map((t) => t.emoji).join(' ')}</Text>
+                <Text style={{ color: colors.subtext, fontSize: 13, fontWeight: '600' }}>{fmtCount(gifts.count)} gift{gifts.count === 1 ? '' : 's'} received</Text>
+              </View>
+            )}
             {profile?.bio ? <Text style={[styles.bio, { color: colors.text }]}>{profile.bio}</Text> : null}
 
             {!isLocked && (
@@ -645,6 +659,7 @@ export default function UserProfileScreen() {
 
       <ActionSheet visible={menuOpen} title={profile?.display_name} options={profileMenuOptions} onClose={() => setMenuOpen(false)} />
       <ImageViewer uri={viewAvatar ? profile?.avatar_url : null} onClose={() => setViewAvatar(false)} />
+      <GiftSheet visible={giftOpen} onClose={() => setGiftOpen(false)} toUserId={profile?.id || String(id)} toName={profile?.display_name} context="profile" />
       <NameInfoModal visible={nameInfoOpen} profile={profile} onClose={() => setNameInfoOpen(false)} />
       <ProfileQRModal visible={qrOpen} profile={profile} onClose={() => setQrOpen(false)} />
       {!!profile?.username && <ShareLinkSheet visible={shareProfileOpen} url={profileLink(profile.username)} title="Share profile" userId={session?.user?.id} onClose={() => setShareProfileOpen(false)} />}
