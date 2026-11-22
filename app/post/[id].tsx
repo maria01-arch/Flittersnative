@@ -1,7 +1,7 @@
 import { PlusButton, ActionTray } from '@/components/ComposerActions';
 import { useEffect, useRef, useState } from 'react';
 import { deleteLast } from '@/lib/emojiSplit';
-import { Animated, ScrollView } from 'react-native';
+import { Animated, ScrollView, BackHandler } from 'react-native';
 import PasteTextInput from '@/components/PasteTextInput';
 import { useClipboardImage } from '@/lib/clipboardImage';
 import PasteImageChip from '@/components/PasteImageChip';
@@ -77,6 +77,12 @@ export default function PostDetailScreen() {
     setCommentsOpen(open);
     Animated.timing(videoH, { toValue: open ? smallH : fullH, duration: 320, useNativeDriver: false }).start();
   };
+  // Back closes the comment panel first (the video grows back to full size) instead of leaving the video.
+  useEffect(() => {
+    if (!commentsOpen || !post?.video_url) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { openComments(false); return true; });
+    return () => sub.remove();
+  }, [commentsOpen, post?.video_url, fullH, smallH]);
   const [threadPosts, setThreadPosts] = useState<any[]>([]);
   const [comments, setComments] = useState<any[]>([]);
   const [text, setText] = useState('');

@@ -140,10 +140,21 @@ export default function ReelCommentsSheet({
   const { topLevel, repliesOf } = useMemo(() => {
     const top: any[] = [];
     const map: Record<string, any[]> = {};
+    // A reply to a reply (made on the post screen, or the web) is shown under its top-level comment too.
+    const byId: Record<string, any> = {};
+    comments.forEach((c) => { byId[c.id] = c; });
+    const rootOf = (c: any) => {
+      let cur = c; let guard = 0;
+      while (cur.reply_to_comment_id && byId[cur.reply_to_comment_id] && guard++ < 50) cur = byId[cur.reply_to_comment_id];
+      return cur.reply_to_comment_id && !byId[cur.reply_to_comment_id] ? cur.reply_to_comment_id : cur.id;
+    };
     comments.forEach((c) => {
-      if (c.reply_to_comment_id) (map[c.reply_to_comment_id] = map[c.reply_to_comment_id] || []).push(c);
-      else top.push(c);
+      if (c.reply_to_comment_id) {
+        const root = rootOf(c);
+        (map[root] = map[root] || []).push(c);
+      } else top.push(c);
     });
+    Object.values(map).forEach((list) => list.sort((x, y) => String(x.created_at).localeCompare(String(y.created_at))));
     return { topLevel: top, repliesOf: map };
   }, [comments]);
 

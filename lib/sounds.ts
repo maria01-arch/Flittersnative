@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
+import { isNotificationSoundAvailable, loadNotificationSound, playNotificationSound } from '../modules/flitters-sound';
 
 // Short, soft app sounds. Each one is a tiny file in assets/sounds.
 // They mix with other audio (music keeps playing), stay quiet, and can be
@@ -27,6 +28,28 @@ let modeAt = 0;
 const players: Record<string, any> = {};
 const lastPlayed: Partial<Record<SoundName, number>> = {};
 
+// Android: sounds play like notification sounds (notification volume, no audio focus), so music, videos
+// and voice notes can't stop them and they don't stop music. Needs the rebuilt app; otherwise the old way below is used.
+const nativeLoaded = new Set<string>();
+let nativeLoading = false;
+async function prepareNative() {
+  if (nativeLoading || Platform.OS !== 'android' || !isNotificationSoundAvailable()) return;
+  nativeLoading = true;
+  try {
+    const { Asset } = require('expo-asset');
+    for (const name of Object.keys(SRC) as SoundName[]) {
+      const files = SRC[name];
+      for (let i = 0; i < files.length; i++) {
+        const a = Asset.fromModule(files[i]);
+        await a.downloadAsync();
+        const uri = a.localUri || a.uri;
+        if (uri && loadNotificationSound(`${name}:${i}`, uri)) nativeLoaded.add(`${name}:${i}`);
+      }
+    }
+  } catch {}
+  nativeLoading = false;
+}
+
 async function load() {
   if (loaded) return;
   loaded = true;
@@ -35,6 +58,7 @@ async function load() {
   } catch {}
 }
 load();
+prepareNative();
 
 // Voice messages and video change the phone's audio mode and leave it that
 // way, which is why the app sounds went quiet until restart. The mode is now
@@ -71,6 +95,8 @@ export function playSound(name: SoundName, force = false) {
     const i = (turn[name] || 0) % SRC[name].length;
     turn[name] = i + 1;
     const pk = `${name}:${i}`;
+    if (nativeLoaded.has(pk) && playNotificationSound(pk, VOLUME[name])) return;
+    if (!nativeLoaded.size) prepareNative();
     const go = () => {
       try {
         let p = players[pk];
