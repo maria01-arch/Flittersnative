@@ -17,6 +17,7 @@ import ChatThemeSheet from '@/components/ChatThemeSheet';
 import { ChatTheme, DEFAULT_THEME, loadChatTheme, saveChatTheme } from '@/lib/chatTheme';
 import { isVerifiedUser } from '@/lib/postActions';
 import { Permission } from '@/lib/permissions';
+import { setActiveStatusVisible } from '@/lib/usePresence';
 import { acceptFollowRequest, declineFollowRequest } from '@/lib/followRequests';
 import { getStoredAccounts, switchToAccount, removeStoredAccount } from '@/lib/accounts';
 import Avatar from '@/components/Avatar';
@@ -107,6 +108,7 @@ export default function SettingsScreen() {
   const [pushStatus, setPushStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [permStatus, setPermStatus] = useState<string>('undetermined');
   const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [prefsOpen, setPrefsOpen] = useState(false);
   // Default chat theme for every chat and group (a chat with its own theme keeps it).
   const [themeOpen, setThemeOpen] = useState(false);
   const [globalTheme, setGlobalTheme] = useState<ChatTheme>(DEFAULT_THEME);
@@ -332,10 +334,20 @@ export default function SettingsScreen() {
         </TouchableOpacity>
 
         <View style={{ marginTop: spacing.md }}>
-          <SettingsRow colors={colors} icon="bookmark-outline" label="Saved posts" onPress={() => router.push('/saved')} />
+          <Text style={[styles.groupLabel, { color: colors.subtext }]}>Your account</Text>
           <SettingsRow colors={colors} icon="person-outline" label="Account" onPress={() => router.push('/edit-profile')} />
           <SettingsRow colors={colors} icon="lock-closed-outline" label="Privacy and security" onPress={() => setPrivacyOpen(true)} />
-          <SettingsRow colors={colors} icon="shield-outline" label="Moderation and content filters" onPress={() => setModerationOpen(true)} />
+          <SettingsRow colors={colors} icon="notifications-outline" label="Notifications" onPress={() => setNotifOpen(true)} />
+          <SettingsRow colors={colors} icon="shield-checkmark-outline" label="Get verified" onPress={() => router.push('/get-verified')} />
+          <SettingsRow
+            colors={colors}
+            icon="pulse-outline"
+            label="Account health"
+            value={health ? (health.unread > 0 ? `${health.unread} new` : health.standing === 'good' ? 'Good' : 'Issue') : undefined}
+            onPress={() => router.push('/account-health')}
+          />
+
+          <Text style={[styles.groupLabel, { color: colors.subtext }]}>Creator and earnings</Text>
           <View style={[styles.row, { borderBottomColor: colors.border }]}>
             <Ionicons name="briefcase-outline" size={20} color={colors.text} />
             <Text style={[styles.rowText, { color: colors.text }]}>Professional mode</Text>
@@ -356,29 +368,46 @@ export default function SettingsScreen() {
           {profile?.is_professional ? (
             <SettingsRow colors={colors} icon="stats-chart-outline" label="Creator dashboard" onPress={() => router.push('/creator')} />
           ) : null}
-          <SettingsRow
-            colors={colors}
-            icon="pulse-outline"
-            label="Account health"
-            value={health ? (health.unread > 0 ? `${health.unread} new` : health.standing === 'good' ? 'Good' : 'Issue') : undefined}
-            onPress={() => router.push('/account-health')}
-          />
-          <SettingsRow colors={colors} icon="shield-checkmark-outline" label="Get verified" onPress={() => router.push('/get-verified')} />
-          <SettingsRow colors={colors} icon="notifications-outline" label="Notifications" onPress={() => setNotifOpen(true)} />
-          <SettingsRow colors={colors} icon="image-outline" label="Content and media" onPress={() => setContentOpen(true)} />
-          <SettingsRow colors={colors} icon="color-palette-outline" label="Appearance" onPress={() => setAppearanceOpen(true)} />
-          <SettingsRow colors={colors} icon="link-outline" label="Links and Preview" onPress={() => setLinksOpen(true)} />
-          <SettingsRow colors={colors} icon="language-outline" label="Languages" onPress={() => comingSoon('Languages')} />
-          <SettingsRow colors={colors} icon="flask-outline" label="Beta features" onPress={() => comingSoon('Beta features')} />
+          <SettingsRow colors={colors} icon="cash-outline" label="Monetization" onPress={() => router.push('/monetization' as any)} />
           <SettingsRow colors={colors} icon="wallet-outline" label="Flit coins" onPress={() => router.push('/wallet' as any)} />
+
+          <Text style={[styles.groupLabel, { color: colors.subtext }]}>Your activity</Text>
+          <SettingsRow colors={colors} icon="bookmark-outline" label="Saved posts" onPress={() => router.push('/saved')} />
           <SettingsRow colors={colors} icon="flame-outline" label="Chat streaks" onPress={() => router.push('/streaks' as any)} />
+
+          <Text style={[styles.groupLabel, { color: colors.subtext }]}>App</Text>
+          <SettingsRow colors={colors} icon="options-outline" label="Preferences" onPress={() => setPrefsOpen(true)} />
           <SettingsRow colors={colors} icon="help-circle-outline" label="Help center" onPress={() => router.push('/help')} />
           <SettingsRow colors={colors} icon="information-circle-outline" label="About" onPress={() => setAboutOpen(true)} />
+
+          <Text style={[styles.groupLabel, { color: colors.subtext }]}>Accounts</Text>
           <SettingsRow colors={colors} icon="swap-horizontal-outline" label="Switch account" onPress={() => router.push('/switch-account')} />
           <SettingsRow colors={colors} icon="log-out-outline" label="Sign Out" onPress={handleSignOut} danger />
-          <SettingsRow colors={colors} icon="trash-outline" label="Delete account" onPress={() => setDeleteOpen(true)} danger />
         </View>
       </ScrollView>
+
+      {/* Preferences: the smaller things, grouped so the main list stays short */}
+      <Modal visible={prefsOpen} animationType="slide" onRequestClose={() => setPrefsOpen(false)}>
+        <View style={[styles.container, { backgroundColor: colors.bg }]}>
+          <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity onPress={() => setPrefsOpen(false)}>
+              <Ionicons name="arrow-back" size={24} color={colors.text} />
+            </TouchableOpacity>
+            <Text style={[styles.title, { color: colors.text }]}>Preferences</Text>
+            <View style={{ width: 24 }} />
+          </View>
+          <ScrollView>
+            <View style={{ marginTop: spacing.md }}>
+              <SettingsRow colors={colors} icon="color-palette-outline" label="Appearance" onPress={() => setAppearanceOpen(true)} />
+              <SettingsRow colors={colors} icon="image-outline" label="Content and media" onPress={() => setContentOpen(true)} />
+              <SettingsRow colors={colors} icon="link-outline" label="Links and Preview" onPress={() => setLinksOpen(true)} />
+              <SettingsRow colors={colors} icon="shield-outline" label="Moderation and content filters" onPress={() => setModerationOpen(true)} />
+              <SettingsRow colors={colors} icon="language-outline" label="Languages" onPress={() => comingSoon('Languages')} />
+              <SettingsRow colors={colors} icon="flask-outline" label="Beta features" onPress={() => comingSoon('Beta features')} />
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
 
       {/* Appearance — full-screen theme + autoplay controls, since those
           are the two settings that actually do something right now. */}
@@ -670,6 +699,7 @@ export default function SettingsScreen() {
               {[
                 { field: 'show_read_receipts', label: 'Read receipts', desc: "When off, people can't see when you've read their messages, and you can't see when they've read yours." },
                 { field: 'show_last_seen', label: 'Last seen', desc: "When off, people can't see when you were last online, and you can't see theirs. \"Active now\" still shows while you're in the app." },
+                { field: 'show_active_status', label: 'Active status', desc: "When off, people can't see when you're active, and you can't see when others are." },
                 { field: 'allow_coowners', label: 'Allow co-owning posts', desc: 'When off, nobody can add you as a co-owner of their post.' },
               ].map((row) => (
                 <View key={row.field} style={[styles.switchRow, { marginTop: 18 }]}>
@@ -677,7 +707,17 @@ export default function SettingsScreen() {
                     <Text style={[styles.sectionLabel, { color: colors.text, marginBottom: 0 }]}>{row.label}</Text>
                     <Text style={{ color: colors.subtext, fontSize: 12, marginTop: 2 }}>{row.desc}</Text>
                   </View>
-                  <Switch value={profile?.[row.field] !== false} onValueChange={(v) => updateProfileField(row.field, v)} trackColor={{ true: colors.primary }} />
+                  <Switch
+                    value={profile?.[row.field] !== false}
+                    onValueChange={async (v) => {
+                      if (row.field !== 'show_active_status') { updateProfileField(row.field, v); return; }
+                      const prev = profile?.show_active_status !== false;
+                      setProfile((p: any) => ({ ...p, show_active_status: v }));
+                      const r = await setActiveStatusVisible(session!.user.id, v);
+                      if (r.error) { setProfile((p: any) => ({ ...p, show_active_status: prev })); Alert.alert("Couldn't change it", 'Run BATCH11_run_this.sql in Supabase first, then try again.'); }
+                    }}
+                    trackColor={{ true: colors.primary }}
+                  />
                 </View>
               ))}
 
@@ -692,6 +732,18 @@ export default function SettingsScreen() {
                   { key: 'nobody', label: 'No one' },
                 ]}
               />
+
+              <Text style={[styles.sectionLabel, { color: colors.subtext, marginTop: 26 }]}>Who can add me to groups</Text>
+              <PermissionPicker
+                colors={colors}
+                value={profile?.who_can_add_to_groups || 'everyone'}
+                onChange={(v: 'everyone' | 'following') => updateProfileField('who_can_add_to_groups', v)}
+                options={[
+                  { key: 'everyone', label: 'Everyone' },
+                  { key: 'following', label: 'People I follow' },
+                ]}
+              />
+              <Text style={{ color: colors.subtext, fontSize: 12, marginTop: 8 }}>People you don't follow can't add you to a group. You can still join a group yourself with its link.</Text>
 
               <Text style={[styles.sectionLabel, { color: colors.subtext, marginTop: 26 }]}>Who can see who I follow</Text>
               <PermissionPicker
@@ -715,6 +767,7 @@ export default function SettingsScreen() {
               />
               <SettingsRow colors={colors} icon="key-outline" label="Change password" onPress={() => setPasswordOpen(true)} />
               <SettingsRow colors={colors} icon="time-outline" label="Where you've logged in" onPress={() => setSessionsOpen(true)} />
+              <SettingsRow colors={colors} icon="trash-outline" label="Delete account" onPress={() => setDeleteOpen(true)} danger />
             </View>
           </ScrollView>
         </View>
@@ -951,6 +1004,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 15, paddingHorizontal: spacing.lg, borderBottomWidth: 1 },
   rowText: { flex: 1, fontSize: 15 },
   section: { padding: spacing.lg },
+  groupLabel: { fontSize: 12, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase', paddingHorizontal: spacing.lg, marginTop: 22, marginBottom: 4 },
   sectionLabel: { fontSize: 13, fontWeight: '600', marginBottom: 10 },
   switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   themeRow: { flexDirection: 'row', gap: 10 },

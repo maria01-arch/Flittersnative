@@ -29,7 +29,8 @@ function coinFaq(cfg: CoinConfig | null): { q: string; a: string }[] {
   else buy = 'Buying coins isn’t available in the app right now. Please check back soon.';
   return [
     { q: 'How can I buy Flit coins?', a: buy },
-    { q: 'How do I gift someone?', a: 'In a chat: tap the + next to the message box, then Gift. On a post: tap the + next to the comment box, then Gift. The gift goes to the creator and shows to everyone as a comment. On a profile: tap the gift icon next to Message. Pick a gift and send it.' },
+    { q: 'How do I gift someone?', a: 'In a chat: tap the + next to the message box, then Gift. On a post: tap the + next to the comment box, then Gift. The gift goes to the creator and shows to everyone as a comment. On a profile: tap the gift icon next to Message. Pick a gift and send it. The gift options only appear for people who have turned on gifts.' },
+    { q: 'How can I receive gifts?', a: 'Gifts on your comments and profile unlock when you have 100 followers and 50 likes in total, or straight away with a verified badge. Gifts in messages are for verified accounts with 500 followers. When you qualify we notify you. Open Settings → Monetization, then choose where you want to receive gifts.' },
     { q: 'What happens to gifts I receive?', a: `You receive ${share}% of a gift’s value as Flit coins. You can spend them on gifts, or withdraw them once withdrawals open${opens ? ' on ' + opens : ''}. Only coins you earn can be withdrawn, not coins you bought. ${per} coins = $1, shown in your own currency in Settings → Flit coins.` },
   ];
 }

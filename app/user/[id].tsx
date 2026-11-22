@@ -28,7 +28,7 @@ import { fmtCount } from '@/lib/formatCount';
 import ProfileQRModal from '@/components/ProfileQRModal';
 import NameInfoModal from '@/components/NameInfoModal';
 import GiftSheet from '@/components/GiftSheet';
-import { giftTotals } from '@/lib/coins';
+import { giftTotals, useGiftAccess, type GiftTop } from '@/lib/coins';
 import ShareLinkSheet from '@/components/ShareLinkSheet';
 import { profileLink } from '@/lib/flittersLinks';
 import { sendFollowRequest, cancelFollowRequest, hasPendingRequest } from '@/lib/followRequests';
@@ -73,7 +73,8 @@ export default function UserProfileScreen() {
   const [qrOpen, setQrOpen] = useState(false);
   const [nameInfoOpen, setNameInfoOpen] = useState(false);
   const [giftOpen, setGiftOpen] = useState(false);
-  const [gifts, setGifts] = useState<{ count: number; top: { emoji: string; n: number }[] }>({ count: 0, top: [] });
+  const [gifts, setGifts] = useState<{ count: number; top: GiftTop[] }>({ count: 0, top: [] });
+  const giftAccess = useGiftAccess(id ? String(id) : null);
   useEffect(() => { if (id) giftTotals(String(id)).then(setGifts).catch(() => {}); }, [id, giftOpen]);
   // Bell: get a notification whenever this person posts.
   const [bellOn, setBellOn] = useState(false);
@@ -531,9 +532,11 @@ export default function UserProfileScreen() {
                 <TouchableOpacity style={[styles.messageButton, { borderColor: colors.primary }]} onPress={startConversation}>
                   <Text style={[styles.messageText, { color: colors.primary }]}>Message</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.bellButton, { borderColor: colors.border }]} onPress={() => setGiftOpen(true)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-                  <Ionicons name="gift-outline" size={20} color={colors.text} />
-                </TouchableOpacity>
+                {giftAccess?.profile_on ? (
+                  <TouchableOpacity style={[styles.bellButton, { borderColor: colors.border }]} onPress={() => setGiftOpen(true)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                    <Ionicons name="gift-outline" size={20} color={colors.text} />
+                  </TouchableOpacity>
+                ) : null}
                 <TouchableOpacity
                   style={[styles.bellButton, { borderColor: bellOn ? colors.primary : colors.border }, bellOn && { backgroundColor: colors.primary + '22' }]}
                   onPress={toggleBell}
@@ -548,10 +551,11 @@ export default function UserProfileScreen() {
               <VerifiedBadge verified={profile?.verified} isAuthentic={profile?.is_authentic} plan={profile?.verified_plan} size={16} />
             </TouchableOpacity>
             {gifts.count > 0 && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 }}>
+              <TouchableOpacity activeOpacity={0.7} onPress={() => router.push(`/gifts/${profile?.id || id}` as any)} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 }}>
                 <Text style={{ fontSize: 15 }}>{gifts.top.map((t) => t.emoji).join(' ')}</Text>
                 <Text style={{ color: colors.subtext, fontSize: 13, fontWeight: '600' }}>{fmtCount(gifts.count)} gift{gifts.count === 1 ? '' : 's'} received</Text>
-              </View>
+                <Ionicons name="chevron-forward" size={14} color={colors.faint} />
+              </TouchableOpacity>
             )}
             {profile?.bio ? <Text style={[styles.bio, { color: colors.text }]}>{profile.bio}</Text> : null}
 

@@ -20,6 +20,8 @@ const iconFor = (type: string, colors: any) => {
   if (type === 'coown') return { name: 'people', color: colors.primary };
   if (type === 'gift') return { name: 'gift', color: '#F5B301' };
   if (type === 'login_alert') return { name: 'shield-checkmark', color: colors.primary };
+  if (type === 'monetization_unlocked') return { name: 'cash', color: '#22C55E' };
+  if (type === 'badge_live') return { name: 'ribbon', color: colors.primary };
   return { name: 'notifications', color: colors.faint };
 };
 
@@ -34,6 +36,7 @@ const labelFor = (n: any) => {
   if (n.type === 'mention') return `${name} mentioned you in a post`;
   if (n.type === 'coown') return `${name} added you as a co-owner of a post`;
   if (n.type === 'gift') return n.message || `${name} sent you a gift`;
+  if (n.type === 'monetization_unlocked' || n.type === 'badge_live') return n.message || (n.type === 'badge_live' ? 'Your Flitters badge is live!' : 'Monetization is unlocked');
   if (n.type === 'login_alert') return `New sign-in on ${platformLabel(n.meta_platform)}${n.meta_location ? ' near ' + n.meta_location : ''}`;
   return `${name} interacted with your content`;
 };
@@ -125,6 +128,12 @@ export default function NotificationsScreen() {
                 markOneRead(item);
                 if (['like', 'repost', 'comment', 'mention', 'coown'].includes(item.type) && item.post_id) {
                   router.push(`/post/${item.post_id}`);
+                } else if (item.type === 'monetization_unlocked') {
+                  router.push('/monetization' as any);
+                } else if (item.type === 'badge_live') {
+                  router.push(`/user/${session?.user?.id}` as any);
+                } else if (item.type === 'gift') {
+                  router.push('/wallet' as any);
                 } else if (item.type === 'login_alert') {
                   router.push('/settings');
                 } else if (item.actor?.id) {

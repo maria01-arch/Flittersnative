@@ -19,6 +19,27 @@ import { getFirstUrl } from '@/lib/linkPreview';
 import { commentLink } from '@/lib/flittersLinks';
 import PollCard from './PollCard';
 
+// A gift left in the comments: "🌹 gifted a Rose — note". Shown as a small gift card instead of plain text.
+function CommentGift({ content }: { content: string }) {
+  const { colors } = useTheme();
+  const emoji = Array.from(content)[0] || '🎁';
+  const rest = content.replace(/^\S+\s*gifted a /, '');
+  const [name, ...noteParts] = rest.split(' — ');
+  const note = noteParts.join(' — ').trim();
+  return (
+    <View style={{ marginTop: 8, alignSelf: 'flex-start', maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, borderWidth: 1, borderColor: '#F5B301AA', backgroundColor: colors.card, paddingVertical: 10, paddingHorizontal: 12 }}>
+      <View style={{ width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(245,179,1,0.18)' }}>
+        <Text style={{ fontSize: 28 }}>{emoji}</Text>
+      </View>
+      <View style={{ flexShrink: 1 }}>
+        <Text style={{ color: '#F5B301', fontSize: 10.5, fontWeight: '800', letterSpacing: 0.8 }}>GIFT</Text>
+        <Text style={{ color: colors.text, fontWeight: '800', fontSize: 15 }} numberOfLines={1}>{name.trim() || 'a gift'}</Text>
+        {note ? <Text style={{ color: colors.subtext, fontSize: 12.5, marginTop: 1 }} numberOfLines={2}>{note}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
 export default function CommentCard({
   comment,
   postId,
@@ -66,7 +87,7 @@ export default function CommentCard({
   };
 
   return (
-    <TouchableOpacity activeOpacity={navigable ? 0.7 : 1} onPress={open} style={[styles.row, { borderBottomColor: colors.border, backgroundColor: comment.gift_sent_id ? 'rgba(245,179,1,0.12)' : colors.bg }]}>
+    <TouchableOpacity activeOpacity={navigable ? 0.7 : 1} onPress={open} style={[styles.row, { borderBottomColor: colors.border, backgroundColor: colors.bg }]}>
       <TouchableOpacity style={{ marginRight: 10 }} onPress={() => comment.author?.id && router.push(`/user/${comment.author.id}`)}>
         <Avatar uri={comment.author?.avatar_url} size={38} />
       </TouchableOpacity>
@@ -87,6 +108,8 @@ export default function CommentCard({
           <View style={{ marginTop: 8 }}>
             <PollCard pollId={String(comment.poll_id)} width={260} />
           </View>
+        ) : comment.gift_sent_id ? (
+          <CommentGift content={comment.content || ''} />
         ) : !!comment.content && <LinkifiedText text={comment.content} style={[styles.content, { color: colors.text }]} linkColor={colors.primary} />}
         {comment.sticker_url ? (
           <TouchableOpacity activeOpacity={0.85} onPress={() => currentUserId && setStickerMenu(true)} onLongPress={() => currentUserId && setStickerMenu(true)} style={{ marginTop: 6, alignSelf: 'flex-start' }}>

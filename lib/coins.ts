@@ -77,9 +77,39 @@ export async function sendGift(args: { giftId: string; toUserId: string; context
   return { ok: true, balance: Number((data as any)?.balance ?? 0) };
 }
 
-export async function giftTotals(userId: string): Promise<{ count: number; top: { emoji: string; n: number }[] }> {
+export type GiftTop = { emoji: string; name: string; cost: number; n: number };
+export async function giftTotals(userId: string): Promise<{ count: number; top: GiftTop[] }> {
   const { data } = await supabase.rpc('gift_totals', { p_user: userId });
   return { count: Number((data as any)?.count ?? 0), top: (data as any)?.top || [] };
 }
+
+export async function giftInventory(userId: string): Promise<{ count: number; items: (GiftTop & { last_at: string })[] }> {
+  const { data } = await supabase.rpc('gift_inventory', { p_user: userId });
+  return { count: Number((data as any)?.count ?? 0), items: (data as any)?.items || [] };
+}
+
+// Who can receive gifts, and what they switched on. Rules live on the server (see 18_monetization.sql).
+export type MonetizationStatus = {
+  badge: boolean; followers: number; likes: number;
+  need_followers: number; need_likes: number; need_dm_followers: number;
+  post_eligible: boolean; dm_eligible: boolean;
+  comments_on: boolean; profile_on: boolean; dm_on: boolean;
+};
+export async function fetchMonetization(userId: string): Promise<MonetizationStatus | null> {
+  const { data, error } = await supabase.rpc('monetization_status', { p_user: userId });
+  if (error || !data) return null;
+  return data as MonetizationStatus;
+}
+export function useGiftAccess(userId?: string | null) {
+  const [st, setSt] = useState<MonetizationStatus | null>(null);
+  useEffect(() => { if (userId) fetchMonetization(userId).then(setSt).catch(() => {}); }, [userId]);
+  return st;
+}
+export async function saveMonetization(v: { comments: boolean; profile: boolean; dm: boolean }): Promise<{ data?: MonetizationStatus; error?: string }> {
+  const { data, error } = await supabase.rpc('set_monetization', { p_comments: v.comments, p_profile: v.profile, p_dm: v.dm });
+  if (error) return { error: error.message };
+  return { data: data as MonetizationStatus };
+}
+
 
 export const fmtCoins = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString());

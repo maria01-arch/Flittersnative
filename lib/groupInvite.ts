@@ -60,6 +60,9 @@ export async function rejectJoinRequest(req: any): Promise<{ error?: string }> {
 
 // Admin adds someone directly, no request needed.
 export async function addMemberDirect(groupId: string, userId: string): Promise<{ error?: string }> {
+  // Some people only let people they follow add them to groups (Settings > Privacy).
+  const { data: blocked } = await supabase.rpc('group_add_blocked', { p_users: [userId] });
+  if (Array.isArray(blocked) && blocked.includes(userId)) return { error: "This person only lets people they follow add them to groups. Send them the group link instead." };
   const { error } = await supabase.from('group_members').insert({ group_id: groupId, user_id: userId, role: 'member' });
   if (error && !/duplicate/i.test(error.message)) return { error: error.message };
   await supabase.from('group_join_requests').update({ status: 'accepted' }).eq('group_id', groupId).eq('user_id', userId).eq('status', 'pending');

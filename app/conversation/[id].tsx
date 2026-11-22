@@ -1,6 +1,7 @@
 import { PlusButton, ActionTray } from '@/components/ComposerActions';
 import GiftSheet from '@/components/GiftSheet';
 import GiftCard from '@/components/GiftCard';
+import { useGiftAccess } from '@/lib/coins';
 import { useViewOnce } from '@/lib/viewOnce';
 import ViewOnceViewer from '@/components/ViewOnceViewer';
 import { useEffect, useRef, useState } from 'react';
@@ -245,6 +246,7 @@ export default function ConversationScreen() {
   const [viewOnceOn, setViewOnceOn] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [giftOpen, setGiftOpen] = useState(false);
+  const giftAccess = useGiftAccess(otherId ? String(otherId) : null);
   const [voMsg, setVoMsg] = useState<any>(null);
   const [trimmer, setTrimmer] = useState<{ uri: string; duration: number | null; max: number } | null>(null);
   const [voicePreview, setVoicePreview] = useState<{ uri: string; duration: number; waveform?: string } | null>(null);
@@ -1504,7 +1506,7 @@ export default function ConversationScreen() {
             actions={[
               { key: 'media', icon: 'image-outline', label: 'Photo', onPress: pickImage },
               { key: 'sticker', icon: 'happy-outline', label: 'Stickers', onPress: () => { if (!showStickerTray) Keyboard.dismiss(); setShowStickerTray(true); } },
-              ...(otherId ? [{ key: 'gift', icon: 'gift-outline', label: 'Gift', onPress: () => { Keyboard.dismiss(); setGiftOpen(true); } }] : []),
+              ...(otherId && giftAccess?.dm_on ? [{ key: 'gift', icon: 'gift-outline', label: 'Gift', onPress: () => { Keyboard.dismiss(); setGiftOpen(true); } }] : []),
             ]}
           />
           <GiftSheet visible={giftOpen} onClose={() => setGiftOpen(false)} toUserId={otherId ? String(otherId) : null} toName={otherProfile?.display_name || (name as string) || null} context="chat" conversationId={String(id)} />

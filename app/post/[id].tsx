@@ -39,6 +39,7 @@ import FollowButton from '@/components/FollowButton';
 import { postLink } from '@/lib/flittersLinks';
 import { playSound } from '@/lib/sounds';
 import GiftSheet from '@/components/GiftSheet';
+import { useGiftAccess } from '@/lib/coins';
 
 export default function PostDetailScreen() {
   const { id, focusComment, fromReels } = useLocalSearchParams();
@@ -221,6 +222,7 @@ export default function PostDetailScreen() {
 
   const [pollOpen, setPollOpen] = useState(false);
   const [giftOpen, setGiftOpen] = useState(false);
+  const giftAccess = useGiftAccess(post?.user_id);
   const [plusOpen, setPlusOpen] = useState(false);
   // A poll posted as a comment.
   const postPollComment = async (pollId: string, question: string) => {
@@ -318,7 +320,7 @@ export default function PostDetailScreen() {
           { key: 'media', icon: 'image-outline', label: 'Photo', onPress: async () => { const u = await pickCommentImage(); if (u) { setCommentImage(u); setPendingSticker(null); } } },
           { key: 'sticker', icon: 'happy-outline', label: 'Stickers', onPress: () => { Keyboard.dismiss(); setShowTray(true); } },
           { key: 'poll', icon: 'stats-chart-outline', label: 'Poll', onPress: () => { Keyboard.dismiss(); setPollOpen(true); } },
-          ...(post.user_id && post.user_id !== session?.user?.id ? [{ key: 'gift', icon: 'gift-outline', label: 'Gift', onPress: () => { Keyboard.dismiss(); setGiftOpen(true); } }] : []),
+          ...(post.user_id && post.user_id !== session?.user?.id && giftAccess?.comments_on ? [{ key: 'gift', icon: 'gift-outline', label: 'Gift', onPress: () => { Keyboard.dismiss(); setGiftOpen(true); } }] : []),
         ]}
       />
       <GiftSheet visible={giftOpen} onClose={() => setGiftOpen(false)} toUserId={post.user_id} toName={post.author?.display_name} context="comment" postId={post.id} onSent={() => { load(); }} />

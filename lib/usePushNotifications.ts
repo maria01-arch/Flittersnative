@@ -279,6 +279,12 @@ async function handleNotificationTap(data: any) {
     router.push(`/user/${data.actorId}`);
   } else if (data.type === 'login_alert') {
     router.push('/settings');
+  } else if (data.type === 'monetization_unlocked') {
+    router.push('/monetization' as any);
+  } else if (data.type === 'badge_live') {
+    router.push('/(tabs)/notifications');
+  } else if (data.type === 'gift') {
+    router.push('/wallet' as any);
   } else {
     router.push('/(tabs)/notifications');
   }

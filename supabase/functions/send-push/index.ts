@@ -8,6 +8,9 @@ const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 // (with the custom sound) is installed on phones, then change to 'flitters'.
 const PUSH_CHANNEL = 'default';
 
+// Notification types whose own `message` is the push text (they may have no actor).
+const PUSH_MESSAGE_TYPES = new Set(['gift', 'monetization_unlocked', 'badge_live']);
+
 const NOTIFICATION_TEXT: Record<string, (name: string) => string> = {
   like: (name) => `${name} liked your post`,
   repost: (name) => `${name} reposted your post`,
@@ -167,7 +170,7 @@ Deno.serve(async (req) => {
       if (record.type === 'comment_reaction') return new Response('ok');
       // The same alert can be written twice (two notification rows for one
       // action). One push per (who, what, to whom, which post) every 2 minutes.
-      if (record.type !== 'login_alert') {
+      if (record.type !== 'login_alert' && !PUSH_MESSAGE_TYPES.has(record.type)) {
         const bucket = Math.floor(Date.now() / 120000);
         const contentKey = `n:${record.type}:${record.actor_id}:${record.user_id}:${record.post_id || ''}:${bucket}`;
         const { error: sameErr } = await supabase.from('push_sent').insert({ key: contentKey });
@@ -177,6 +180,12 @@ Deno.serve(async (req) => {
         const platform = record.meta_platform === 'ios' ? 'an iPhone' : record.meta_platform === 'android' ? 'an Android device' : 'a device';
         const location = record.meta_location ? ` near ${record.meta_location}` : '';
         await pushToUser(record.user_id, 'New sign-in', `Your account was just signed into on ${platform}${location}.`, { type: 'login_alert' });
+        return new Response('ok');
+      }
+      // Gifts, "monetization unlocked" and "your badge is live" already carry their own sentence.
+      if (PUSH_MESSAGE_TYPES.has(record.type)) {
+        const title = record.type === 'badge_live' ? 'Your badge is live' : record.type === 'monetization_unlocked' ? 'Monetization unlocked' : 'You got a gift';
+        await pushToUser(record.user_id, title, record.message || title, { type: record.type, postId: record.post_id, actorId: record.actor_id });
         return new Response('ok');
       }
       const { data: actor } = await supabase.from('profiles').select('display_name').eq('id', record.actor_id).single();

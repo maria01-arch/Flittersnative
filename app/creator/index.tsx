@@ -1,3 +1,4 @@
+import { useGiftAccess } from '@/lib/coins';
 import { useCallback, useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Image } from 'react-native';
 import Text from '@/components/AppText';
@@ -36,6 +37,7 @@ export default function CreatorDashboard() {
   const { colors } = useTheme();
   const { session } = useAuth();
   const uid = session?.user?.id;
+  const monet = useGiftAccess(uid);
 
   const [loading, setLoading] = useState(true);
   const [isPro, setIsPro] = useState(false);
@@ -163,6 +165,16 @@ export default function CreatorDashboard() {
               Turn on professional mode to see how your posts do: views, likes, comments, new followers, your best posts, and stats for each post.
             </Text>
           </View>
+          {monet?.post_eligible ? (
+            <TouchableOpacity activeOpacity={0.7} onPress={() => router.push('/monetization' as any)} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.primary, flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 0, marginBottom: 14 }]}>
+              <Text style={{ fontSize: 22 }}>🪙</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.text, fontWeight: '700' }}>Monetization</Text>
+                <Text style={{ color: colors.subtext, fontSize: 12 }}>{monet.comments_on || monet.profile_on || monet.dm_on ? 'Gifts are on. Manage where you receive them' : "You're eligible. Turn on gifts"}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.faint} />
+            </TouchableOpacity>
+          ) : null}
           <Text style={[styles.label, { color: colors.subtext }]}>What best describes you?</Text>
           <View style={styles.wrap}>
             {CATEGORIES.map((c) => <Chip key={c} label={c} active={pickCategory === c} onPress={() => setPickCategory(c)} />)}
@@ -175,6 +187,16 @@ export default function CreatorDashboard() {
       ) : (
         <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 60 }}>
           {category ? <Text style={{ color: colors.subtext, marginBottom: 10 }}>{category} account</Text> : null}
+          {monet?.post_eligible ? (
+            <TouchableOpacity activeOpacity={0.7} onPress={() => router.push('/monetization' as any)} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.primary, flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 0, marginBottom: 14 }]}>
+              <Text style={{ fontSize: 22 }}>🪙</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.text, fontWeight: '700' }}>Monetization</Text>
+                <Text style={{ color: colors.subtext, fontSize: 12 }}>{monet.comments_on || monet.profile_on || monet.dm_on ? 'Gifts are on. Manage where you receive them' : "You're eligible. Turn on gifts"}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.faint} />
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity activeOpacity={0.7} onPress={() => router.push('/creator/scheduled' as any)} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 0, marginBottom: 14 }]}>
             <Ionicons name="time-outline" size={22} color={colors.primary} />
             <View style={{ flex: 1 }}>

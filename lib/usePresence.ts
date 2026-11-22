@@ -9,6 +9,9 @@ const listeners = new Set<(ids: Set<string>) => void>();
 let retry = 0;
 let retryTimer: any = null;
 let appSub: any = null;
+// "Show my active status" is off: this phone doesn't announce itself, and (like most apps) doesn't show others as active either.
+let hidden = false;
+let prefLoadedFor: string | null = null;
 
 // Someone who drops off and comes back within a few seconds (weak network, phone
 // switching wifi/data) used to flash offline -> online. Now a person only shows as
@@ -18,6 +21,7 @@ const lastSeenAt = new Map<string, number>();
 let graceTimer: any = null;
 
 function computeIds(channel: any) {
+  if (hidden) return new Set<string>();
   const state = channel.presenceState();
   const now = Date.now();
   const live = new Set<string>();
@@ -68,7 +72,14 @@ function build(userId: string) {
     if (sharedChannel !== channel) return;
     if (status === 'SUBSCRIBED') {
       retry = 0;
-      try { await channel.track({ user_id: userId, online_at: new Date().toISOString() }); } catch {}
+      if (prefLoadedFor !== userId) {
+        try {
+          const { data } = await supabase.from('profiles').select('show_active_status').eq('id', userId).maybeSingle();
+          hidden = (data as any)?.show_active_status === false;
+          prefLoadedFor = userId;
+        } catch {}
+      }
+      if (!hidden) { try { await channel.track({ user_id: userId, online_at: new Date().toISOString() }); } catch {} }
       publish(channel);
     } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
       clearTimeout(retryTimer);
@@ -84,6 +95,7 @@ function build(userId: string) {
     appSub = AppState.addEventListener('change', (s) => {
       if (s !== 'active' || !sharedChannelUserId) return;
       const ch = sharedChannel;
+      if (hidden && ch && ch.state === 'joined') return;
       if (ch && ch.state === 'joined') {
         ch.track({ user_id: sharedChannelUserId, online_at: new Date().toISOString() }).catch(() => build(sharedChannelUserId!));
       } else {
@@ -116,4 +128,21 @@ export function useOnlinePresence(currentUserId?: string) {
   }, [currentUserId]);
 
   return onlineIds;
+}
+
+// Called from Settings > Privacy. Saves the choice and applies it right away.
+export async function setActiveStatusVisible(userId: string, visible: boolean): Promise<{ error?: string }> {
+  const { error } = await supabase.from('profiles').update({ show_active_status: visible }).eq('id', userId);
+  if (error) return { error: error.message };
+  hidden = !visible;
+  prefLoadedFor = userId;
+  const ch = sharedChannel;
+  if (ch) {
+    try {
+      if (visible) await ch.track({ user_id: userId, online_at: new Date().toISOString() });
+      else await ch.untrack();
+    } catch {}
+    publish(ch);
+  }
+  return {};
 }
