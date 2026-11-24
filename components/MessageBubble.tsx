@@ -21,6 +21,7 @@ import StickerMedia from './StickerMedia';
 import { router } from 'expo-router';
 import { parseMomentReply } from '@/lib/momentReply';
 import MessageVideoPlayer from './MessageVideoPlayer';
+import { saveVideoIfAllowed } from '@/lib/download';
 import PollCard from './PollCard';
 import { LinearGradient } from 'expo-linear-gradient';
 import { DEFAULT_BUBBLE_COLOR } from '@/lib/chatTheme';
@@ -38,11 +39,15 @@ function BubbleImage({ uri, previewUri, onPress, onLongPress, radius, captioned,
   const remote = useOriginal ? uri : optimizedUrl(uri, Math.ceil(boxW * PixelRatio.get())) || uri;
   // Until the uploaded picture is downloaded, keep showing the local one the
   // sender just picked, so there's no blank flash when the upload finishes.
-  const [remoteReady, setRemoteReady] = useState(!previewUri);
+  // readyFor remembers WHICH address has finished downloading. When the picture's address changes (the upload
+  // finished and it now points at the uploaded copy), the local picture stays on screen until the new one is
+  // downloaded, so nothing blinks.
+  const [readyFor, setReadyFor] = useState<string | null>(null);
+  const remoteReady = !previewUri || readyFor === remote;
   useEffect(() => {
     if (!previewUri) return;
     let cancelled = false;
-    Image.prefetch(remote).then(() => !cancelled && setRemoteReady(true)).catch(() => !cancelled && setRemoteReady(true));
+    Image.prefetch(remote).then(() => !cancelled && setReadyFor(remote)).catch(() => !cancelled && setReadyFor(remote));
     return () => {
       cancelled = true;
     };
@@ -314,6 +319,9 @@ export default function MessageBubble({
       : []),
     ...(rawText.trim().length > 150 && !isVoice && !isSticker && !isPack
       ? [{ key: 'readfull', label: 'Read in full', icon: 'reader-outline', onPress: doAfterClose(() => setTimeout(() => setReadFull(true), 250)) }]
+      : []),
+    ...(message.video_url && !isPending && !isFailed && !isViewOnce
+      ? [{ key: 'savevideo', label: 'Save video', icon: 'download-outline', onPress: doAfterClose(() => saveVideoIfAllowed(currentUserId, message.video_url)) }]
       : []),
     ...(onForward && !isPending && !isFailed && !isViewOnce
       ? [{ key: 'forward', label: 'Forward', icon: 'arrow-redo-outline', onPress: doAfterClose(() => onForward(message)) }]

@@ -31,25 +31,21 @@ export default function CommentThreadScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [replyImage, setReplyImage] = useState<string | null>(null);
-  const prefilled = useRef(false);
+  // Who the next reply is for. null = the top comment's author. Pick another person with their Reply button.
+  const [target, setTarget] = useState<{ id: string; username: string } | null>(null);
   const clip = useClipboardImage();
-
-  // Replies start with @theirusername (the person you are answering) so everyone can tell who it is for.
-  const mention = (t: string) => {
-    const u = root?.author?.username;
-    return u && root?.user_id !== session?.user?.id && !t.startsWith('@') ? `@${u} ${t}` : t;
-  };
 
   const load = async () => {
     const { all, byId } = await loadCommentTree(postId as string, session?.user?.id);
-    const r = byId[id as string] || null;
-    setRoot(r);
-    // Start the reply box with @username once (not again after posting).
-    if (!prefilled.current && r?.author?.username && r.user_id !== session?.user?.id) {
-      prefilled.current = true;
-      setText((t) => (t ? t : `@${r.author.username} `));
+    let r = byId[id as string] || null;
+    // Opened a reply (from a link or a notification)? Show its top comment, with the reply's author as who you answer.
+    if (r?.reply_to_comment_id && byId[r.reply_to_comment_id]) {
+      const picked = r;
+      r = byId[r.reply_to_comment_id];
+      if (picked.author?.id && picked.author.id !== session?.user?.id) setTarget({ id: picked.author.id, username: picked.author.username });
     }
-    setReplies(all.filter((c: any) => c.reply_to_comment_id === id));
+    setRoot(r);
+    setReplies(r ? all.filter((c: any) => c.reply_to_comment_id === r.id) : []);
     setLoading(false);
   };
 
@@ -94,7 +90,7 @@ export default function CommentThreadScreen() {
   };
 
   const submitReply = async () => {
-    if ((!text.replace(/^@\S+\s*/, '').trim() && !replyImage) || !session?.user?.id || !root) return;
+    if ((!text.trim() && !replyImage) || !session?.user?.id || !root) return;
     // A reply is still a comment on the original post, so it's gated by
     // that post's who_can_comment — fetched here rather than on every
     // screen load, since replying is the only moment it matters.
@@ -117,8 +113,9 @@ export default function CommentThreadScreen() {
     const { error: rErr } = await supabase.from('comments').insert({
       post_id: postId,
       user_id: session.user.id,
-      content: mention(text.trim()),
+      content: text.trim(),
       reply_to_comment_id: root.id,
+      ...(target && target.id !== root.user_id ? { reply_to_user_id: target.id } : {}),
       ...(imageUrl ? { image_url: imageUrl } : {}),
     });
     if (rErr) {
@@ -126,13 +123,16 @@ export default function CommentThreadScreen() {
       setSending(false);
       return;
     }
-    if (root.user_id && root.user_id !== session.user.id) {
-      await supabase.from('notifications').insert({ user_id: root.user_id, actor_id: session.user.id, type: 'comment', post_id: postId });
+    // The person the reply is for gets a notification (and the top comment's author, if that is someone else).
+    const notify = Array.from(new Set([root.user_id, target?.id].filter((u) => u && u !== session.user.id))) as string[];
+    for (const u of notify) {
+      await supabase.from('notifications').insert({ user_id: u, actor_id: session.user.id, type: 'comment', post_id: postId });
     }
-    // People tagged with @username in the reply get a notification (the person replied to already gets one).
-    notifyMentions([mention(text.trim())], String(postId), session.user.id, root.user_id ? [root.user_id] : []).catch(() => {});
+    // People tagged with @username in the reply get a notification (the people replied to already got one).
+    notifyMentions([text.trim()], String(postId), session.user.id, notify).catch(() => {});
     setText('');
     setReplyImage(null);
+    setTarget(null);
     await load();
     setSending(false);
   };
@@ -163,6 +163,7 @@ export default function CommentThreadScreen() {
             postId={postId as string}
             currentUserId={session?.user?.id}
             navigable={false}
+            onReply={() => setTarget(null)}
             onLike={(c) => toggleLike(c, true)}
             onRepost={(c) => toggleRepost(c, true)}
             // Deleting the root comment of this thread leaves nothing left
@@ -176,6 +177,8 @@ export default function CommentThreadScreen() {
             comment={item}
             postId={postId as string}
             currentUserId={session?.user?.id}
+            navigable={false}
+            onReply={(c) => c.author?.id && c.author.id !== session?.user?.id && setTarget({ id: c.author.id, username: c.author.username })}
             onLike={(c) => toggleLike(c)}
             onRepost={(c) => toggleRepost(c)}
             onDelete={(c) => setReplies((prev) => prev.filter((x) => x.id !== c.id))}
@@ -200,6 +203,14 @@ export default function CommentThreadScreen() {
           onDismiss={clip.dismiss}
         />
       )}
+      {target ? (
+        <View style={[styles.imgPreviewBar, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
+          <Text style={{ color: colors.subtext }}>Replying to <Text style={{ color: colors.primary, fontWeight: '700' }}>@{target.username}</Text></Text>
+          <TouchableOpacity onPress={() => setTarget(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close-circle" size={20} color={colors.subtext} />
+          </TouchableOpacity>
+        </View>
+      ) : null}
       <MentionSuggest text={text} onChange={setText} />
       <ActionTray
         open={plusOpen}

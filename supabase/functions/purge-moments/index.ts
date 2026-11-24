@@ -24,24 +24,27 @@ Deno.serve(async (req) => {
   const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   const r2 = new AwsClient({ accessKeyId: key, secretAccessKey: sec, service: 's3', region: 'auto' });
 
-  // expired more than an hour ago, so nobody is still mid-view
-  const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-  const { data: rows, error } = await db.from('moments').select('id,media_url').lt('expires_at', cutoff).order('expires_at').limit(200);
+  // 1) moments that ended more than an hour ago leave the database (their files are put on the trash list by a trigger)
+  const { data: gone, error: e1 } = await db.rpc('purge_expired_moments');
+  if (e1) return new Response('Run 19_media_trash.sql first: ' + e1.message, { status: 500 });
+
+  // 2) delete the files on the trash list from R2 (moments deleted by hand or with an account end up here too)
+  const { data: rows, error } = await db.from('media_trash').select('id,url,tries').lt('tries', 10).order('id').limit(200);
   if (error) return new Response(error.message, { status: 500 });
 
   let files = 0, kept = 0;
-  const done: string[] = [];
+  const done: number[] = [];
   for (const m of rows || []) {
     let path = '';
-    try { path = decodeURIComponent(new URL(m.media_url).pathname.replace(/^\/+/, '')); } catch {}
-    if (!path || !FOLDER.test(path)) { done.push(m.id); continue; }      // not one of our R2 files (old host, odd link): just drop the row
+    try { path = decodeURIComponent(new URL(m.url).pathname.replace(/^\/+/, '')); } catch {}
+    if (!path || !FOLDER.test(path)) { done.push(m.id); continue; }      // not one of our R2 files (old host, odd link): nothing to delete
     const url = `https://${acct}.r2.cloudflarestorage.com/${bucket}/${path.split('/').map(encodeURIComponent).join('/')}`;
     try {
       const res = await r2.fetch(url, { method: 'DELETE' });
       if (res.ok || res.status === 404) { files++; done.push(m.id); }
-      else { kept++; console.warn('R2 delete failed', res.status, path); }   // keep the row, try again next run
-    } catch (e) { kept++; console.warn('R2 delete error', String(e)); }
+      else { kept++; console.warn('R2 delete failed', res.status, path); await db.from('media_trash').update({ tries: (m.tries || 0) + 1 }).eq('id', m.id); }
+    } catch (e) { kept++; console.warn('R2 delete error', String(e)); await db.from('media_trash').update({ tries: (m.tries || 0) + 1 }).eq('id', m.id); }
   }
-  if (done.length) await db.from('moments').delete().in('id', done);
-  return Response.json({ checked: rows?.length ?? 0, deleted_rows: done.length, files_removed: files, will_retry: kept });
+  if (done.length) await db.from('media_trash').delete().in('id', done);
+  return Response.json({ expired_moments_removed: gone ?? 0, checked_files: rows?.length ?? 0, files_removed: files, will_retry: kept });
 });

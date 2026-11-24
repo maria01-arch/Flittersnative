@@ -46,6 +46,16 @@ export async function loadCommentTree(postId: string, myUserId?: string) {
     }
   });
 
+  // "Replying to @name" tags: who a reply was written for (people already in the list first, the rest looked up).
+  const names: Record<string, any> = {};
+  list.forEach((c: any) => { if (c.author?.id) names[c.author.id] = c.author; });
+  const missing = Array.from(new Set(list.map((c: any) => c.reply_to_user_id).filter((u: string) => u && !names[u]))) as string[];
+  if (missing.length) {
+    const { data: ps } = await supabase.from('profiles').select('id,username,display_name').in('id', missing);
+    (ps || []).forEach((p: any) => { names[p.id] = p; });
+  }
+  list.forEach((c: any) => { c.reply_to_user = c.reply_to_user_id ? names[c.reply_to_user_id] || null : null; });
+
   return { all: list, byId };
 }
 

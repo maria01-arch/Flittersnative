@@ -242,6 +242,7 @@ export default function GroupChatScreen() {
   const [messages, setMessages] = useState<any[]>(() => getCachedMessages(`gc:${id}`) || []);
   const messagesRef = useRef<any[]>([]);
   messagesRef.current = messages;
+  const catchUpRef = useRef<() => void>(() => {});
   useEffect(() => {
     const top = messages[0];
     if (top && lastTopId.current && top.id !== lastTopId.current && awayRef.current && top.sender_id !== session?.user?.id && !String(top.id).startsWith('temp')) {
@@ -445,7 +446,15 @@ export default function GroupChatScreen() {
   const addIncomingMessage = (msg: any, author?: any) => {
     if (msg.sender_id !== session?.user?.id && !msg.system_event) playSound('incoming');
     if (msg.sender_id !== session?.user?.id) pushEvent({ kind: 'group', id: String(id), msg: { __read: true } });
-    setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [{ ...msg, reactions: msg.reactions || [], author: author || msg.author }, ...prev]));
+    setMessages((prev) => {
+      if (prev.some((m) => m.id === msg.id)) return prev;
+      if (msg.sender_id === session?.user?.id) {
+        // The server's copy of a message I'm still sending: it completes that bubble in place (slow network).
+        const pend = prev.find((m: any) => m._pending && String(m.id).startsWith('temp_') && (m.content || '') === (msg.content || '') && !!m.image_url === !!msg.image_url && !!m.video_url === !!msg.video_url && !!m.is_voice === !!msg.is_voice && !!m.is_sticker === !!msg.is_sticker);
+        if (pend) return prev.map((m: any) => (m.id === pend.id ? { ...msg, reactions: [], author: myProfileRef.current, _key: m._key || m.id, ...(pend.localImage ? { localImage: pend.localImage } : {}) } : m));
+      }
+      return [{ ...msg, reactions: msg.reactions || [], author: author || msg.author }, ...prev];
+    });
   };
 
   useEffect(() => {
@@ -532,6 +541,7 @@ export default function GroupChatScreen() {
             connecting = false;
             if (status === 'SUBSCRIBED') {
               retry = 0;
+              catchUpRef.current();
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
               const delay = Math.min(1000 * 2 ** retry, 10000);
               retry += 1;
@@ -556,6 +566,11 @@ export default function GroupChatScreen() {
       setCachedMessages(`gc:${id}`, messagesRef.current);
       if (channelRef.current) supabase.removeChannel(channelRef.current);
     };
+  }, [id]);
+
+  useEffect(() => {
+    const t = setInterval(() => catchUpRef.current(), 20000);
+    return () => clearInterval(t);
   }, [id]);
 
   useAppForeground(() => {
@@ -621,13 +636,44 @@ export default function GroupChatScreen() {
     animateNextChange();
     const withAuthor = { ...data, author: myProfileRef.current };
     // _key keeps the row's identity, so the bubble is not rebuilt (blinks) when it gets its real id.
-    setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...withAuthor, reactions: [], _key: m._key || m.id } : m)));
+    setMessages((prev) => {
+      const temp = prev.find((m) => m.id === tempId);
+      if (!temp) return prev.some((m) => m.id === data.id) ? prev : [{ ...withAuthor, reactions: [] }, ...prev];   // already completed by the live copy
+      return prev.filter((m) => m.id !== data.id).map((m) => (m.id === tempId ? { ...withAuthor, reactions: [], _key: m._key || m.id, ...(m.localImage && !data.localImage ? { localImage: m.localImage } : {}) } : m));
+    });
     return withAuthor;
   };
 
-  const failOptimistic = (tempId: string) => {
+  const failOptimistic = async (tempId: string) => {
+    // On a bad network the message may have reached the server even though its answer got lost: look before saying it failed.
+    const t = messagesRef.current.find((m: any) => m.id === tempId);
+    if (t && session?.user?.id) {
+      try {
+        const since = new Date(new Date(t.created_at).getTime() - 20000).toISOString();
+        const { data } = await supabase.from('group_messages').select('*').eq('group_id', id).eq('sender_id', session.user.id).gte('created_at', since).order('created_at', { ascending: false }).limit(10);
+        const hit = (data || []).find((r: any) => (r.content || '') === (t.content || '') && !!r.image_url === !!t.image_url && !!r.video_url === !!t.video_url && !!r.is_voice === !!t.is_voice && !!r.is_sticker === !!t.is_sticker && !messagesRef.current.some((m: any) => m.id === r.id && m.id !== tempId));
+        if (hit) { resolveOptimistic(tempId, hit); return; }
+      } catch {}
+    }
     animateNextChange();
     setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, _pending: false, _failed: true } : m)));
+  };
+
+  // Fetch other people's newer messages: when the live connection came back, and every 20 seconds as a safety net.
+  catchUpRef.current = async () => {
+    try {
+      const real = messagesRef.current.filter((m: any) => !String(m.id).startsWith('temp_'));
+      const newest = real.reduce((a: string, m: any) => ((m.created_at || '') > a ? m.created_at : a), '');
+      if (!newest) return;
+      const { data } = await supabase.from('group_messages').select('*').eq('group_id', id).gt('created_at', newest).order('created_at', { ascending: true }).limit(50);
+      const rows = (data || []).filter((m: any) => m.sender_id !== session?.user?.id && isAfterCleared(m.created_at, clearedRef.current));
+      if (!rows.length) return;
+      const ids = Array.from(new Set(rows.map((m: any) => m.sender_id).filter(Boolean)));
+      const { data: authors } = ids.length ? await supabase.from('profiles').select('id,display_name,avatar_url').in('id', ids as string[]) : { data: [] as any[] };
+      const map: Record<string, any> = {};
+      (authors || []).forEach((a: any) => (map[a.id] = a));
+      rows.forEach((m: any) => addIncomingMessage(m, map[m.sender_id]));
+    } catch {}
   };
 
   const sendTextMessage = async (content: string, replyTo: any, tempId?: string) => {
@@ -797,7 +843,7 @@ export default function GroupChatScreen() {
     const once = viewOnceOn;
     setReplyingTo(null);
     setViewOnceOn(false);
-    const temp = makeTempMessage({ content: caption, image_url: localUri, ...(reply?.label ? { reply_to: reply.label, reply_to_id: reply.id } : {}), ...(once ? { view_once: true } : {}) });
+    const temp = makeTempMessage({ content: caption, image_url: localUri, localImage: localUri, ...(reply?.label ? { reply_to: reply.label, reply_to_id: reply.id } : {}), ...(once ? { view_once: true } : {}) });
     addOptimistic(temp);
     sendImageMessage(localUri, temp.id, caption, reply, once);
   };

@@ -176,6 +176,7 @@ export default function ReelCommentsSheet({
     const row: any = postId ? { post_id: postId, user_id: me, content, ...extra } : { reel_id: reelId, user_id: me, content, ...extra };
     // Replying to a reply attaches to the same top-level comment, so threads stay one level deep.
     if (replyingTo) row.reply_to_comment_id = replyingTo.reply_to_comment_id || replyingTo.id;
+    if (replyingTo?.reply_to_comment_id) row.reply_to_user_id = replyingTo.user_id || replyingTo.author?.id;
     const { data, error } = await supabase.from('comments').insert(row).select(SELECT).single();
     setSending(false);
     if (error || !data) {
@@ -208,6 +209,7 @@ export default function ReelCommentsSheet({
     if (!me || !reelId) return;
     const row: any = postId ? { post_id: postId, user_id: me, content: pollContent(question), poll_id: pollId } : { reel_id: reelId, user_id: me, content: pollContent(question), poll_id: pollId };
     if (replyingTo) row.reply_to_comment_id = replyingTo.reply_to_comment_id || replyingTo.id;
+    if (replyingTo?.reply_to_comment_id) row.reply_to_user_id = replyingTo.user_id || replyingTo.author?.id;
     const { data, error } = await supabase.from('comments').insert(row).select(SELECT).single();
     if (error || !data) {
       Alert.alert("Couldn't post", 'Check your connection and try again.');
@@ -288,6 +290,10 @@ export default function ReelCommentsSheet({
             <Text style={[styles.name, { color: colors.text, marginBottom: 0, flexShrink: 1 }]} numberOfLines={1}>{c.author?.display_name || 'Unknown'}</Text>
             <VerifiedBadge verified={c.author?.verified} isAuthentic={c.author?.is_authentic} plan={c.author?.verified_plan} size={12} />
           </View>
+          {!!c.reply_to_user_id && (() => {
+            const who = comments.find((x: any) => (x.user_id || x.author?.id) === c.reply_to_user_id)?.author;
+            return who?.username ? <Text style={{ color: colors.subtext, fontSize: 12, marginBottom: 2 }}>↪ Replying to <Text style={{ color: colors.primary, fontWeight: '700' }}>@{who.username}</Text></Text> : null;
+          })()}
           {!!c.content && <Text style={[styles.content, { color: colors.text }]}>{c.content}</Text>}
           {!!c.image_url && (
             <TouchableOpacity activeOpacity={0.9} onPress={() => setViewUri(c.image_url)} onLongPress={() => setMenuFor(c)}>

@@ -47,6 +47,7 @@ export default function CommentCard({
   onLike,
   onRepost,
   onDelete,
+  onReply,
   navigable = true,
 }: {
   comment: any;
@@ -55,6 +56,8 @@ export default function CommentCard({
   onLike?: (c: any) => void;
   onRepost?: (c: any) => void;
   onDelete?: (c: any) => void;
+  // When given, the reply button picks this comment as who you are answering (used inside a thread).
+  onReply?: (c: any) => void;
   navigable?: boolean;
 }) {
   const { colors } = useTheme();
@@ -104,6 +107,12 @@ export default function CommentCard({
             </TouchableOpacity>
           )}
         </View>
+        {comment.reply_to_user?.username ? (
+          <TouchableOpacity onPress={() => comment.reply_to_user?.id && router.push(`/user/${comment.reply_to_user.id}`)} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3, alignSelf: 'flex-start' }}>
+            <Ionicons name="return-down-forward" size={13} color={colors.faint} />
+            <Text style={{ color: colors.subtext, fontSize: 12.5 }}>Replying to <Text style={{ color: colors.primary, fontWeight: '700' }}>@{comment.reply_to_user.username}</Text></Text>
+          </TouchableOpacity>
+        ) : null}
         {comment.poll_id ? (
           <View style={{ marginTop: 8 }}>
             <PollCard pollId={String(comment.poll_id)} width={260} />
@@ -124,9 +133,9 @@ export default function CommentCard({
         <ImageViewer uri={viewImage ? comment.image_url : null} onClose={() => setViewImage(false)} />
         {previewUrl ? <LinkPreviewCard url={previewUrl} /> : null}
         <View style={styles.actions}>
-          <TouchableOpacity style={styles.actionItem} onPress={open}>
-            <Ionicons name="chatbubble-outline" size={15} color={colors.faint} />
-            <Text style={[styles.actionText, { color: colors.subtext }]}>{comment.replies_count || 0}</Text>
+          <TouchableOpacity style={styles.actionItem} onPress={onReply ? () => onReply(comment) : open}>
+            <Ionicons name={onReply ? 'arrow-undo-outline' : 'chatbubble-outline'} size={15} color={colors.faint} />
+            <Text style={[styles.actionText, { color: colors.subtext }]}>{onReply ? 'Reply' : comment.replies_count || 0}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.actionItem} onPress={() => onRepost && onRepost(comment)}>
             <Ionicons name="repeat" size={16} color={comment.reposted_by_me ? colors.repost : colors.faint} />

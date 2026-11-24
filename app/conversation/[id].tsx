@@ -216,6 +216,7 @@ export default function ConversationScreen() {
   const [messages, setMessages] = useState<any[]>(() => getCachedMessages(`dm:${id}`) || []);
   const messagesRef = useRef<any[]>([]);
   messagesRef.current = messages;
+  const catchUpRef = useRef<() => void>(() => {});
   useEffect(() => {
     const top = messages[0];
     if (top && lastTopId.current && top.id !== lastTopId.current && awayRef.current && top.sender_id !== session?.user?.id && !String(top.id).startsWith('temp')) {
@@ -518,7 +519,12 @@ export default function ConversationScreen() {
       if (prev.some((m) => m.id === msg.id)) return prev;
       // My own message coming back from the server while its bubble is still
       // being sent: the send path swaps it in, so don't add a second copy.
-      if (mine && prev.some((m: any) => m._pending && String(m.id).startsWith('temp_') && (m.content || '') === (msg.content || '') && !!m.image_url === !!msg.image_url && !!m.video_url === !!msg.video_url && !!m.is_voice === !!msg.is_voice)) return prev;
+      if (mine) {
+        // The server's copy of a message I'm still sending (slow network: its answer hasn't come back yet).
+        // It completes that bubble in place, so the message shows even if the answer never arrives.
+        const pend = prev.find((m: any) => m._pending && String(m.id).startsWith('temp_') && (m.content || '') === (msg.content || '') && !!m.image_url === !!msg.image_url && !!m.video_url === !!msg.video_url && !!m.is_voice === !!msg.is_voice && !!m.is_sticker === !!msg.is_sticker);
+        if (pend) return prev.map((m: any) => (m.id === pend.id ? { ...msg, reactions: [], _key: m._key || m.id, ...(pend.localImage ? { localImage: pend.localImage } : {}) } : m));
+      }
       return [{ ...msg, reactions: msg.reactions || [] }, ...prev];
     });
     if (!mine && !msg.read_at) {
@@ -673,6 +679,7 @@ export default function ConversationScreen() {
             if (status === 'SUBSCRIBED') {
               retry = 0;
               markAllRead();
+              catchUpRef.current();
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
               const delay = Math.min(1000 * 2 ** retry, 10000);
               retry += 1;
@@ -697,6 +704,11 @@ export default function ConversationScreen() {
       setCachedMessages(`dm:${id}`, messagesRef.current);
       if (channelRef.current) supabase.removeChannel(channelRef.current);
     };
+  }, [id]);
+
+  useEffect(() => {
+    const t = setInterval(() => catchUpRef.current(), 20000);
+    return () => clearInterval(t);
   }, [id]);
 
   useAppForeground(() => {
@@ -749,12 +761,38 @@ export default function ConversationScreen() {
     animateNextChange();
     // If the server's copy already arrived live, drop it so there is one bubble.
     // _key keeps the row's identity, so the bubble is not rebuilt (blinks) when it gets its real id.
-    setMessages((prev) => prev.filter((m) => m.id !== data.id).map((m) => (m.id === tempId ? { ...data, reactions: [], _key: m._key || m.id } : m)));
+    setMessages((prev) => {
+      const temp = prev.find((m) => m.id === tempId);
+      if (!temp) return prev.some((m) => m.id === data.id) ? prev : [{ ...data, reactions: [] }, ...prev];   // already completed by the live copy
+      return prev.filter((m) => m.id !== data.id).map((m) => (m.id === tempId ? { ...data, reactions: [], _key: m._key || m.id, ...(m.localImage && !data.localImage ? { localImage: m.localImage } : {}) } : m));
+    });
   };
 
-  const failOptimistic = (tempId: string) => {
+  const failOptimistic = async (tempId: string) => {
+    // On a bad network the message may have reached the server even though its answer got lost.
+    // Look for it before telling the person it failed (and before a retry would send it twice).
+    const t = messagesRef.current.find((m: any) => m.id === tempId);
+    if (t && session?.user?.id) {
+      try {
+        const since = new Date(new Date(t.created_at).getTime() - 20000).toISOString();
+        const { data } = await supabase.from('messages').select('*').eq('conversation_id', id).eq('sender_id', session.user.id).gte('created_at', since).order('created_at', { ascending: false }).limit(10);
+        const hit = (data || []).find((r: any) => (r.content || '') === (t.content || '') && !!r.image_url === !!t.image_url && !!r.video_url === !!t.video_url && !!r.is_voice === !!t.is_voice && !!r.is_sticker === !!t.is_sticker && !messagesRef.current.some((m: any) => m.id === r.id && m.id !== tempId));
+        if (hit) { resolveOptimistic(tempId, hit); broadcastSent(hit); return; }
+      } catch {}
+    }
     animateNextChange();
     setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, _pending: false, _failed: true } : m)));
+  };
+
+  // Fetch anything newer than what is on screen: after the live connection dropped and came back, and every 20 seconds as a safety net.
+  catchUpRef.current = async () => {
+    try {
+      const real = messagesRef.current.filter((m: any) => !String(m.id).startsWith('temp_'));
+      const newest = real.reduce((a: string, m: any) => ((m.created_at || '') > a ? m.created_at : a), '');
+      if (!newest) return;
+      const { data } = await supabase.from('messages').select('*').eq('conversation_id', id).gt('created_at', newest).order('created_at', { ascending: true }).limit(50);
+      (data || []).filter((m: any) => isAfterCleared(m.created_at, clearedRef.current)).forEach((m: any) => addIncomingMessage(m));
+    } catch {}
   };
 
   const broadcastSent = (data: any) => {
@@ -907,7 +945,7 @@ export default function ConversationScreen() {
     // shows in the bubble at full quality right away — it's swapped for
     // the R2 url once the upload finishes, invisibly to the eye since it's
     // the same picture either way.
-    const temp = makeTempMessage({ content: caption, image_url: localUri, ...(reply?.label ? { reply_to: reply.label, reply_to_id: reply.id } : {}), ...(once ? { view_once: true } : {}) });
+    const temp = makeTempMessage({ content: caption, image_url: localUri, localImage: localUri, ...(reply?.label ? { reply_to: reply.label, reply_to_id: reply.id } : {}), ...(once ? { view_once: true } : {}) });
     addOptimistic(temp);
     sendImageMessage(localUri, temp.id, caption, reply, once);
   };

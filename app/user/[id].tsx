@@ -32,7 +32,6 @@ import { giftTotals, useGiftAccess, type GiftTop } from '@/lib/coins';
 import ShareLinkSheet from '@/components/ShareLinkSheet';
 import { profileLink } from '@/lib/flittersLinks';
 import { sendFollowRequest, cancelFollowRequest, hasPendingRequest } from '@/lib/followRequests';
-import { useScreenSecure } from '@/lib/screenSecure';
 import { pinPost } from '@/lib/creator';
 
 const AnimatedFlatList = Animated.createAnimatedComponent(require('react-native').FlatList);
@@ -105,8 +104,6 @@ export default function UserProfileScreen() {
       return () => setScreenFocused(false);
     }, [])
   );
-  // Screenshots and screen recording are blocked on other people's profiles (needs expo-screen-capture in the build).
-  useScreenSecure(screenFocused && session?.user?.id !== id, 'flitters-profile');
   const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
     const firstVideo = viewableItems.find((v: any) => v.item?.video_url);
     setActiveVideoKey(firstVideo ? firstVideo.item.feedKey || firstVideo.item.id : null);
