@@ -27,6 +27,8 @@ export default function TabLayout() {
           // screen, and everything its own useEffect does, doesn't exist
           // at all until that tab is actually opened once.
           lazy: true,
+          // Switching tabs cross-fades instead of snapping.
+          animation: 'fade',
         }}>
         <Tabs.Screen name="index" />
         <Tabs.Screen name="search" />

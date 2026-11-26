@@ -4,16 +4,17 @@ import GiftCard from '@/components/GiftCard';
 import { useGiftAccess } from '@/lib/coins';
 import { useViewOnce } from '@/lib/viewOnce';
 import ViewOnceViewer from '@/components/ViewOnceViewer';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Animated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { supportsReplyId } from '@/lib/replySupport';
-import { View, FlatList, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Image, LayoutAnimation, Alert, Keyboard } from 'react-native';
+import { View, FlatList, TextInput, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Image, LayoutAnimation, Alert, Keyboard } from 'react-native';
+import TouchableOpacity from '@/components/PressScale';
 import Text from '@/components/AppText';
 import PasteTextInput from '@/components/PasteTextInput';
 import { useClipboardImage } from '@/lib/clipboardImage';
 import PasteImageChip from '@/components/PasteImageChip';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLocalSearchParams, router } from 'expo-router';
+import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchStreaks, streakHint, REWARD_DAYS, type Streak } from '@/lib/streaks';
 import StreakFlame from '@/components/StreakFlame';
@@ -64,7 +65,8 @@ import { acquireTyping, sendTyping as sendTypingSignal } from '@/lib/typingHub';
 import { useOnlinePresence } from '@/lib/usePresence';
 import { useAppForeground } from '@/lib/useAppForeground';
 import { useVoiceRecorder } from '@/lib/useVoiceRecorder';
-import { uploadVoiceNote, uploadImage, uploadVideo } from '@/lib/upload';
+import { uploadVoiceNote, uploadImage, uploadVideo, uploadDocument } from '@/lib/upload';
+import { pickDocument } from '@/lib/chatFiles';
 import { checkVideoLimits, getVideoLimitSeconds, canTrimToFit } from '@/lib/videoLimits';
 import VideoTrimmer from '@/components/VideoTrimmer';
 
@@ -369,6 +371,8 @@ export default function ConversationScreen() {
   const clearedRef = useRef<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [meVerified, setMeVerified] = useState(false);
+  // Back from Chat info: pick up a theme changed there.
+  useFocusEffect(useCallback(() => { if (id) loadChatTheme(String(id)).then(setChatTheme); }, [id]));
   useEffect(() => {
     if (id) loadChatTheme(String(id)).then(setChatTheme);
     isVerifiedUser(session?.user?.id).then(setMeVerified);
@@ -902,6 +906,42 @@ export default function ConversationScreen() {
     }
   };
 
+  const sendFileMessage = async (f: { uri: string; name: string; size: number }, tempId: string) => {
+    const url = await uploadDocument(f.uri, `messages/${session!.user.id}`, f.name);
+    if (!url) { failOptimistic(tempId); return; }
+    const { data, error } = await supabase
+      .from('messages')
+      .insert({ conversation_id: id, sender_id: session!.user.id, content: f.name, file_url: url, file_name: f.name, file_size: f.size })
+      .select()
+      .single();
+    if (error || !data) { console.error('[sendFile] insert failed:', error?.message); failOptimistic(tempId); return; }
+    resolveOptimistic(tempId, data);
+    broadcastSent(data);
+  };
+
+  const pickFile = async () => {
+    try {
+      const f = await pickDocument();
+      if (!f || !session?.user?.id) return;
+      if (f.size > 50 * 1024 * 1024) { Alert.alert('File too large', 'Files can be up to 50 MB.'); return; }
+      const temp = makeTempMessage({ content: f.name, file_url: f.uri, file_name: f.name, file_size: f.size });
+      addOptimistic(temp);
+      sendFileMessage(f, temp.id);
+    } catch (e) {
+      Alert.alert('Files unavailable', 'Update the app to send files.');
+    }
+  };
+
+  const takePhoto = async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) { Alert.alert('Camera permission needed', 'Allow camera access in Settings.'); return; }
+    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images', 'videos'], quality: 0.9, videoMaxDuration: 60 });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    if (asset.type === 'video') setVideoUri(asset.uri);
+    else setImageUri(asset.uri);
+  };
+
   const { opened: voOpened, markOpened: voMark } = useViewOnce(messages, session?.user?.id);
 
   const sendImageMessage = async (localUri: string, tempId: string, caption = '', reply?: { label: string | null; id: string | null }, viewOnce = false) => {
@@ -1306,7 +1346,7 @@ export default function ConversationScreen() {
         <TouchableOpacity onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.topBarCenter, { flex: 1, minWidth: 0 }]} onPress={() => otherId && router.push(`/user/${otherId}`)}>
+        <TouchableOpacity style={[styles.topBarCenter, { flex: 1, minWidth: 0 }]} onPress={() => otherId && router.push({ pathname: '/chat-info/[id]', params: { id: String(id), otherId: String(otherId) } } as any)}>
           <View>
             <RingAvatar userId={otherId as string} uri={otherProfile?.avatar_url || (otherAvatar as string)} size={34} noTap />
             {isOtherOnline && <View style={[styles.onlineDot, { borderColor: colors.card }]} />}
@@ -1337,6 +1377,7 @@ export default function ConversationScreen() {
         visible={topMenuOpen}
         onClose={() => setTopMenuOpen(false)}
         options={[
+          ...(otherId ? [{ label: 'Chat info', icon: 'information-circle-outline' as const, onPress: () => router.push({ pathname: '/chat-info/[id]', params: { id: String(id), otherId: String(otherId) } } as any) }] : []),
           { label: 'Chat theme', icon: 'color-palette-outline', onPress: () => setThemeOpen(true) },
           { label: 'Clear history', icon: 'trash-outline', destructive: true, onPress: () => askClearHistory() },
         ]}
@@ -1542,7 +1583,9 @@ export default function ConversationScreen() {
             open={plusOpen}
             onClose={() => setPlusOpen(false)}
             actions={[
+              { key: 'camera', icon: 'camera-outline', label: 'Camera', onPress: takePhoto },
               { key: 'media', icon: 'image-outline', label: 'Photo', onPress: pickImage },
+              { key: 'file', icon: 'document-attach-outline', label: 'File', onPress: pickFile },
               { key: 'sticker', icon: 'happy-outline', label: 'Stickers', onPress: () => { if (!showStickerTray) Keyboard.dismiss(); setShowStickerTray(true); } },
               ...(otherId && giftAccess?.dm_on ? [{ key: 'gift', icon: 'gift-outline', label: 'Gift', onPress: () => { Keyboard.dismiss(); setGiftOpen(true); } }] : []),
             ]}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { View, FlatList, StyleSheet, ActivityIndicator, RefreshControl, TouchableOpacity } from 'react-native';
+import { View, FlatList, StyleSheet, ActivityIndicator, RefreshControl } from 'react-native';
+import TouchableOpacity from '@/components/PressScale';
 import Text from '@/components/AppText';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';

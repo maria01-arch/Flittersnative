@@ -40,7 +40,7 @@ module.exports = {
   expo: {
     name: "Flitters",
     slug: "flitters-native",
-    version: "1.0.4",
+    version: "1.0.10",
     orientation: "portrait",
     icon: "./assets/images/flitters-app-icon.png",
     scheme: "flittersnative",
@@ -114,6 +114,8 @@ module.exports = {
     },
     plugins: [
       "expo-router",
+      // Play Console fixes: optional hardware features, release minify + symbols (see plugins/withPlayFixes.js)
+      "./plugins/withPlayFixes",
       "expo-iap",
       ...(hasMediaLibrary ? [["expo-media-library", { savePhotosPermission: "Flitters saves the pictures and videos you choose to your gallery.", isAccessMediaLocationEnabled: false }]] : []),
       // Lets Flitters appear in the phone's Share list (text, links, photos,

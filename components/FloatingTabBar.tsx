@@ -1,4 +1,5 @@
-import { TouchableOpacity, StyleSheet, Animated, Platform } from 'react-native';
+import { StyleSheet, Animated, Platform } from 'react-native';
+import TouchableOpacity from './PressScale';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { View } from 'react-native';

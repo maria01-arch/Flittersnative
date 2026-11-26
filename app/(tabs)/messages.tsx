@@ -1,7 +1,8 @@
 import { SITE_URL } from '@/lib/siteConfig';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, Pressable, Alert, TextInput } from 'react-native';
+import { View, FlatList, StyleSheet, ActivityIndicator, Modal, Pressable, Alert, TextInput } from 'react-native';
+import TouchableOpacity from '@/components/PressScale';
 import Text from '@/components/AppText';
 import { Swipeable } from 'react-native-gesture-handler';
 import { isAfterCleared } from '@/lib/clearHistory';

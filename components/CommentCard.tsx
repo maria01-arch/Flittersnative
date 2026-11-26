@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { View, Image, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Image, StyleSheet, Alert } from 'react-native';
+import TouchableOpacity from './PressScale';
 import Text from '@/components/AppText';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';

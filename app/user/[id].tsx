@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { hasLiveCoverReward } from '@/lib/streaks';
-import { View, StyleSheet, TouchableOpacity, ActivityIndicator, Animated, Alert, Image } from 'react-native';
+import { View, StyleSheet, ActivityIndicator, Animated, Alert, Image } from 'react-native';
+import TouchableOpacity from '@/components/PressScale';
 import Text from '@/components/AppText';
 import { BlurView } from 'expo-blur';
 import { onOwnBadgeChanged } from '@/lib/billingRefresh';

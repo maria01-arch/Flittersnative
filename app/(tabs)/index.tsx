@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchAdEngagement, type AdEng } from '@/lib/adEngagement';
-import { View, StyleSheet, RefreshControl, ActivityIndicator, TouchableOpacity, ScrollView, Animated, Alert } from 'react-native';
+import { View, StyleSheet, RefreshControl, ActivityIndicator, ScrollView, Animated, Alert } from 'react-native';
+import TouchableOpacity from '@/components/PressScale';
 import Text from '@/components/AppText';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useFocusEffect } from 'expo-router';
@@ -175,7 +176,8 @@ export default function HomeScreen() {
   // feed is already deliberately simpler (pure reverse-chronological).
   const decorateReposts = (data: any[], flags: MyPostFlags) =>
     (data || [])
-      .filter((r: any) => r.post)
+      // Plain reposts (no comment) are not shown in the feed; only quote reposts are. The ranking still counts them.
+      .filter((r: any) => r.post && String(r.content || '').trim())
       .map((r: any) => {
         const p = r.post;
         return {
@@ -228,6 +230,7 @@ export default function HomeScreen() {
         .select(`id,created_at,content,user:profiles(id,display_name,username,avatar_url,verified,is_authentic,verified_plan),post:posts(${postSelect()})`)
         .order('created_at', { ascending: false })
         .limit(PAGE_SIZE);
+      repostsQuery = repostsQuery.not('content', 'is', null).neq('content', '');
       if (cursor) repostsQuery = repostsQuery.lt('created_at', cursor);
       if (followingIds) repostsQuery = repostsQuery.in('user_id', followingIds);
     }

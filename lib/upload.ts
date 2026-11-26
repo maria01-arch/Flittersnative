@@ -306,3 +306,12 @@ export async function uploadSticker(uri: string, userId: string): Promise<string
   const path = `stickers/${userId}_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
   return uploadFile(uri, path, STICKER_MIME_BY_EXT[ext] || 'image/jpeg');
 }
+
+// Any document (pdf, doc, zip...). The server accepts application/octet-stream,
+// so the real type is not sent; the file keeps its extension in the key so it
+// downloads with a sensible name.
+export async function uploadDocument(uri: string, folder: string, fileName: string): Promise<string | null> {
+  const ext = ((fileName.split('.').pop() || 'bin').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'bin').slice(0, 8);
+  const path = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+  return uploadFile(uri, path, 'application/octet-stream');
+}

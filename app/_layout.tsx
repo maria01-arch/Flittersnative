@@ -79,7 +79,14 @@ function RootLayoutNav() {
 
   return (
     <RNThemeProvider value={navTheme}>
-      <Stack screenOptions={{ contentStyle: { backgroundColor: colors.bg } }}>
+      <Stack
+        screenOptions={{
+          contentStyle: { backgroundColor: colors.bg },
+          // iPhone-style: new screens slide in from the right, swipe from anywhere on the screen to go back.
+          animation: 'ios_from_right',
+          gestureEnabled: true,
+          fullScreenGestureEnabled: true,
+        }}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="landing" options={{ headerShown: false }} />
         <Stack.Screen name="join/[tag]" options={{ headerShown: false }} />
@@ -96,16 +103,16 @@ function RootLayoutNav() {
         <Stack.Screen name="ad-comments/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="login" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-        <Stack.Screen name="compose" options={{ presentation: 'modal', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
+        <Stack.Screen name="compose" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
         <Stack.Screen name="user/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="user/[id]/following" options={{ headerShown: false }} />
         <Stack.Screen name="post/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="conversation/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="comment/[id]" options={{ headerShown: false }} />
-        <Stack.Screen name="groups/create" options={{ presentation: 'modal', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
+        <Stack.Screen name="groups/create" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
         <Stack.Screen name="groups/settings" options={{ headerShown: false }} />
         <Stack.Screen name="groups/[id]" options={{ headerShown: false }} />
-        <Stack.Screen name="edit-profile" options={{ presentation: 'modal', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
+        <Stack.Screen name="edit-profile" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
         <Stack.Screen name="creator/index" options={{ headerShown: false }} />
         <Stack.Screen name="account-health/index" options={{ headerShown: false }} />
@@ -115,7 +122,7 @@ function RootLayoutNav() {
         <Stack.Screen name="help/ticket/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="creator/post/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="creator/scheduled" options={{ headerShown: false }} />
-        <Stack.Screen name="new-message" options={{ presentation: 'modal', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
+        <Stack.Screen name="new-message" options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
         <Stack.Screen name="flitters-ai" options={{ headerShown: false }} />
         <Stack.Screen name="signup" options={{ headerShown: false }} />
         <Stack.Screen name="forgot-password" options={{ headerShown: false }} />

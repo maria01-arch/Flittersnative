@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, Image, PixelRatio, StyleSheet, TouchableOpacity, Pressable, Modal, useWindowDimensions, Alert } from 'react-native';
+import { View, Image, PixelRatio, StyleSheet, Pressable, Modal, useWindowDimensions, Alert } from 'react-native';
+import TouchableOpacity from './PressScale';
 import Text from '@/components/AppText';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import Ionicons from '@expo/vector-icons/Ionicons';

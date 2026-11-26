@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, Animated, PanResponder, TouchableOpacity, Image, Modal, Pressable, PixelRatio, useWindowDimensions, Keyboard } from 'react-native';
+import { openFile, fileSizeText } from '@/lib/chatFiles';
+import { View, StyleSheet, Animated, PanResponder, Image, Modal, Pressable, PixelRatio, useWindowDimensions, Keyboard } from 'react-native';
+import TouchableOpacity from './PressScale';
 import Text from '@/components/AppText';
 import { optimizedUrl, markCdnBroken } from '@/lib/imageUrl';
 import OptImage from './OptImage';
@@ -258,6 +260,7 @@ export default function MessageBubble({
   const isPack = !!message.shared_pack_id;
   const isViewOnce = !!(message.view_once && (message.image_url || message.video_url) && !isVoice && !isSticker);
   const isPoll = !!message.poll_id && !isVoice && !isSticker;
+  const isFile = !!(message.file_url && !isVoice && !isSticker);
   const isVideo = !!(message.video_url && !isVoice && !isSticker && !isViewOnce);
   const isImage = !!(message.image_url && !isVoice && !isSticker && !isVideo && !isViewOnce);
   const isPending = !!message._pending;
@@ -469,6 +472,16 @@ export default function MessageBubble({
               </View>
             )}
           </>
+        ) : isFile ? (
+          <TouchableOpacity onPress={() => !preview && !isPending && openFile(message.file_url, message.file_name)} onLongPress={() => !preview && openMenu()} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, paddingHorizontal: 12, minWidth: 200 }}>
+            <View style={{ width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: isMine ? 'rgba(255,255,255,0.22)' : colors.inputBg }}>
+              <Ionicons name="document-text" size={22} color={isMine ? '#fff' : colors.primary} />
+            </View>
+            <View style={{ flexShrink: 1 }}>
+              <Text numberOfLines={1} style={{ color: isMine ? '#fff' : colors.text, fontWeight: '700', fontSize: 14 }}>{message.file_name || 'File'}</Text>
+              <Text style={{ color: isMine ? 'rgba(255,255,255,0.8)' : colors.subtext, fontSize: 12 }}>{fileSizeText(message.file_size)}{isPending ? ' · sending…' : ''}</Text>
+            </View>
+          </TouchableOpacity>
         ) : isImage ? (
           // A tap opens the image fullscreen — this used to sit inside a
           // TouchableOpacity that only had onLongPress wired up, so taps
